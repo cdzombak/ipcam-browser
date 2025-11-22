@@ -8,7 +8,7 @@ A web application for browsing and viewing IP camera recordings and snapshots wi
 - 🔍 Filter by date, media type (images/videos), and trigger type (alarm/periodic)
 - 🖼️ Gallery view with thumbnails
 - 🎬 Built-in video player for H.264 (.264) and H.265 (.265) files
-- 🔄 On-the-fly video remuxing (raw H.264/H.265 → MP4) using ffmpeg
+- 🔄 On-the-fly video remuxing (raw H.264/H.265 → MP4) with aggressive error handling
 - 🔐 HTTP Basic Authentication support
 - 📦 Single self-contained binary (frontend embedded with go:embed)
 - 🚀 CORS-free proxy architecture
@@ -140,7 +140,15 @@ Fetches raw H.264/H.265 video from camera and remuxes to MP4 on-the-fly for brow
 
 **Response:** MP4 video stream (Content-Type: video/mp4)
 
-**Note:** This endpoint uses ffmpeg to convert raw H.264/H.265 bitstreams into MP4 containers. The conversion is done in real-time with no re-encoding (copy codec), so it's fast and preserves quality. The `proxyUrl` field in media items automatically points to this endpoint for videos.
+**Technical Details:**
+- Downloads video to temporary file first
+- Uses ffmpeg to remux (no re-encoding) raw H.264/H.265 into MP4 container
+- Employs aggressive error handling (`-fflags +genpts+discardcorrupt+igndts`, `-err_detect ignore_err`)
+- Generates proper timestamps and handles corrupted parameter sets from camera
+- Output is standard MP4 with `+faststart` for maximum compatibility
+- Sets Content-Length header for efficient browser playback
+- Preserves original video quality (codec copy, no transcoding)
+- The `proxyUrl` field in media items automatically points to this endpoint
 
 ## Directory Structure
 
@@ -222,6 +230,16 @@ curl "http://localhost:8080/api/proxy?url=http://192.168.205.196/web/sd/20251122
 - ✅ Firefox
 - ✅ Safari
 - ⚠️ H.265 video playback may not be supported in all browsers
+
+## Known Issues
+
+The camera outputs raw H.264/H.265 bitstreams with corrupted or missing Picture Parameter Sets (PPS). The application handles this by:
+- Using aggressive ffmpeg error handling during remuxing
+- Generating timestamps from the bitstream
+- Discarding corrupt packets while preserving playable content
+- Creating fragmented MP4 containers that browsers can progressively load
+
+Video playback works in modern browsers despite these issues thanks to their built-in error recovery mechanisms.
 
 ## Future Enhancements
 

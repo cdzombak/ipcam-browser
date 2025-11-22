@@ -460,7 +460,10 @@
                 const triggerClass = media.trigger === 'alarm' ? 'alarm' : 'periodic';
                 const triggerLabel = media.trigger === 'alarm' ? 'Alarm/Motion' : 'Periodic';
 
-                const thumbnailUrl = `/api/proxy?url=${encodeURIComponent(media.url)}`;
+                // Use actual image URL for images, placeholder SVG for videos
+                const thumbnailUrl = media.type === 'image'
+                    ? `/api/proxy?url=${encodeURIComponent(media.url)}`
+                    : 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22300%22 height=%22200%22%3E%3Crect fill=%22%23333%22 width=%22300%22 height=%22200%22/%3E%3Ctext fill=%22%23fff%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2248%22%3E📹%3C/text%3E%3C/svg%3E';
 
                 return `
                     <div class="media-card" data-name="${media.name}">

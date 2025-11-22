@@ -183,53 +183,89 @@ func handleVideoProxy(w http.ResponseWriter, r *http.Request) {
 		inputFormat = "hevc"
 	}
 
-	// Use ffmpeg to remux raw H.264/H.265 to MP4
-	// Add error concealment and browser-compatible settings
-	cmd := exec.Command("ffmpeg",
-		"-loglevel", "error", // Only show errors
-		"-err_detect", "ignore_err", // Ignore decoding errors
-		"-fflags", "+genpts", // Generate presentation timestamps
-		"-f", inputFormat, // Input format
-		"-i", "pipe:0", // Read from stdin
-		"-c:v", "copy", // Don't re-encode video
-		"-movflags", "frag_keyframe+empty_moov+default_base_moof", // Fragmented MP4 for streaming
-		"-max_muxing_queue_size", "1024", // Increase buffer
-		"-f", "mp4", // Output format
-		"pipe:1", // Write to stdout
-	)
-
-	cmd.Stdin = resp.Body
-
-	// Set content type
-	w.Header().Set("Content-Type", "video/mp4")
-
-	// Stream the output directly to the response
-	cmd.Stdout = w
-
-	// Capture errors
-	stderr, err := cmd.StderrPipe()
+	// Create a temporary file to hold the raw video
+	tempFile, err := os.CreateTemp("", "camera-video-*."+inputFormat)
 	if err != nil {
-		log.Printf("Failed to create stderr pipe: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to start ffmpeg: %v", err)
+		log.Printf("Failed to create temp file: %v", err)
 		http.Error(w, "Failed to process video", http.StatusInternalServerError)
 		return
 	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
 
-	// Log ffmpeg errors
-	go func() {
-		errOutput, _ := io.ReadAll(stderr)
-		if len(errOutput) > 0 {
-			log.Printf("ffmpeg stderr: %s", errOutput)
-		}
-	}()
+	// Download the entire video first
+	_, err = io.Copy(tempFile, resp.Body)
+	if err != nil {
+		log.Printf("Failed to download video: %v", err)
+		http.Error(w, "Failed to download video", http.StatusBadGateway)
+		return
+	}
 
-	if err := cmd.Wait(); err != nil {
-		log.Printf("ffmpeg error: %v", err)
+	// Create a second temp file for the MP4 output
+	// We need to use a temp file (not pipe) to support +faststart flag
+	outputFile, err := os.CreateTemp("", "camera-mp4-*.mp4")
+	if err != nil {
+		log.Printf("Failed to create output temp file: %v", err)
+		http.Error(w, "Failed to process video", http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(outputFile.Name())
+	defer outputFile.Close()
+
+	// Convert to browser-compatible MP4 using remux (no re-encoding)
+	// Use aggressive error handling to deal with corrupted parameter sets from camera
+	cmd := exec.Command("ffmpeg",
+		"-y", // Overwrite output file without asking
+		"-loglevel", "error", // Only show errors (reduce log noise)
+		"-analyzeduration", "100M", // Analyze more data to find codec parameters
+		"-probesize", "100M", // Read more data when probing
+		"-fflags", "+genpts+discardcorrupt+igndts", // Generate PTS, discard corrupt packets, ignore DTS
+		"-err_detect", "ignore_err", // Ignore decoding errors
+		"-max_error_rate", "1.0", // Allow up to 100% error rate
+		"-i", tempFile.Name(), // Input file
+		"-c:v", "copy", // Copy codec (no re-encoding)
+		"-movflags", "+faststart", // Put moov atom at start for better compatibility
+		"-f", "mp4", // Output format
+		outputFile.Name(), // Write to temp output file
+	)
+
+	// Run ffmpeg and capture errors
+	errOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("ffmpeg error: %v, output: %s", err, string(errOutput))
+		http.Error(w, "Failed to convert video", http.StatusInternalServerError)
+		return
+	}
+	if len(errOutput) > 0 {
+		log.Printf("ffmpeg warnings: %s", string(errOutput))
+	}
+
+	// Reopen the output file for reading
+	outputFile.Close()
+	finalFile, err := os.Open(outputFile.Name())
+	if err != nil {
+		log.Printf("Failed to open converted video: %v", err)
+		http.Error(w, "Failed to read converted video", http.StatusInternalServerError)
+		return
+	}
+	defer finalFile.Close()
+
+	// Get file info for Content-Length header
+	fileInfo, err := finalFile.Stat()
+	if err != nil {
+		log.Printf("Failed to stat converted video: %v", err)
+		http.Error(w, "Failed to read video info", http.StatusInternalServerError)
+		return
+	}
+
+	// Set headers
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
+
+	// Stream the MP4 file to the response
+	_, err = io.Copy(w, finalFile)
+	if err != nil {
+		log.Printf("Failed to stream video: %v", err)
 	}
 }
 
