@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
 	"embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,8 +14,10 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/html"
 )
@@ -25,6 +29,160 @@ type Config struct {
 	CameraURL string
 	Username  string
 	Password  string
+	CacheDir  string
+}
+
+// MediaCache handles thread-safe caching of media files
+type MediaCache struct {
+	dir       string
+	inFlight  sync.Map // tracks in-flight operations to prevent duplicate work
+	locks     sync.Map // per-file mutexes for cache operations
+}
+
+// NewMediaCache creates a new cache instance
+func NewMediaCache(dir string) (*MediaCache, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create cache directory: %w", err)
+	}
+	return &MediaCache{
+		dir: dir,
+	}, nil
+}
+
+// getCacheKey generates a unique cache key for a URL
+func (c *MediaCache) getCacheKey(url string, suffix string) string {
+	hash := sha256.Sum256([]byte(url))
+	return hex.EncodeToString(hash[:]) + suffix
+}
+
+// getCachePath returns the full path for a cache file
+func (c *MediaCache) getCachePath(url string, suffix string) string {
+	return filepath.Join(c.dir, c.getCacheKey(url, suffix))
+}
+
+// getFileLock gets or creates a mutex for a specific cache file
+func (c *MediaCache) getFileLock(cacheKey string) *sync.Mutex {
+	lock, _ := c.locks.LoadOrStore(cacheKey, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+// Get retrieves a file from cache, or executes fetchFunc if not cached
+// This ensures only one goroutine fetches a given file at a time
+func (c *MediaCache) Get(url string, suffix string, fetchFunc func() ([]byte, error)) (string, error) {
+	cachePath := c.getCachePath(url, suffix)
+	cacheKey := c.getCacheKey(url, suffix)
+
+	// Fast path: check if file exists in cache
+	if _, err := os.Stat(cachePath); err == nil {
+		return cachePath, nil
+	}
+
+	// Get the lock for this specific cache key
+	fileLock := c.getFileLock(cacheKey)
+	fileLock.Lock()
+	defer fileLock.Unlock()
+
+	// Double-check: file might have been created while we waited for lock
+	if _, err := os.Stat(cachePath); err == nil {
+		return cachePath, nil
+	}
+
+	// Check if another goroutine is already fetching this file
+	if _, inFlight := c.inFlight.LoadOrStore(cacheKey, true); inFlight {
+		// Wait briefly and check again - another goroutine is handling this
+		fileLock.Unlock()
+		// Small sleep to allow the other goroutine to finish
+		// Note: this is a simplification; proper implementation might use channels
+		fileLock.Lock()
+		if _, err := os.Stat(cachePath); err == nil {
+			c.inFlight.Delete(cacheKey)
+			return cachePath, nil
+		}
+	}
+	defer c.inFlight.Delete(cacheKey)
+
+	// Fetch the file
+	data, err := fetchFunc()
+	if err != nil {
+		return "", fmt.Errorf("fetch failed: %w", err)
+	}
+
+	// Write to temporary file first (atomic operation)
+	tempFile, err := os.CreateTemp(c.dir, "temp-*"+suffix)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	defer os.Remove(tempPath) // Clean up temp file if rename fails
+
+	if _, err := tempFile.Write(data); err != nil {
+		tempFile.Close()
+		return "", fmt.Errorf("failed to write temp file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	// Atomic rename to final location
+	if err := os.Rename(tempPath, cachePath); err != nil {
+		return "", fmt.Errorf("failed to rename cache file: %w", err)
+	}
+
+	return cachePath, nil
+}
+
+// GetWithFile is like Get but uses a file-based fetch function
+// This is more efficient for large files that are already on disk
+func (c *MediaCache) GetWithFile(url string, suffix string, fetchFunc func(destPath string) error) (string, error) {
+	cachePath := c.getCachePath(url, suffix)
+	cacheKey := c.getCacheKey(url, suffix)
+
+	// Fast path: check if file exists in cache
+	if _, err := os.Stat(cachePath); err == nil {
+		return cachePath, nil
+	}
+
+	// Get the lock for this specific cache key
+	fileLock := c.getFileLock(cacheKey)
+	fileLock.Lock()
+	defer fileLock.Unlock()
+
+	// Double-check: file might have been created while we waited for lock
+	if _, err := os.Stat(cachePath); err == nil {
+		return cachePath, nil
+	}
+
+	// Check if another goroutine is already fetching this file
+	if _, inFlight := c.inFlight.LoadOrStore(cacheKey, true); inFlight {
+		fileLock.Unlock()
+		fileLock.Lock()
+		if _, err := os.Stat(cachePath); err == nil {
+			c.inFlight.Delete(cacheKey)
+			return cachePath, nil
+		}
+	}
+	defer c.inFlight.Delete(cacheKey)
+
+	// Create temporary file
+	tempFile, err := os.CreateTemp(c.dir, "temp-*"+suffix)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	tempFile.Close()
+	defer os.Remove(tempPath)
+
+	// Fetch directly to temp file
+	if err := fetchFunc(tempPath); err != nil {
+		return "", fmt.Errorf("fetch failed: %w", err)
+	}
+
+	// Atomic rename to final location
+	if err := os.Rename(tempPath, cachePath); err != nil {
+		return "", fmt.Errorf("failed to rename cache file: %w", err)
+	}
+
+	return cachePath, nil
 }
 
 type MediaItem struct {
@@ -49,6 +207,7 @@ type DirectoryEntry struct {
 }
 
 var config Config
+var mediaCache *MediaCache
 
 func main() {
 	// Load config from environment
@@ -56,7 +215,16 @@ func main() {
 		CameraURL: getEnv("CAMERA_URL", "http://192.168.205.196/web/sd"),
 		Username:  getEnv("CAMERA_USERNAME", "admin"),
 		Password:  getEnv("CAMERA_PASSWORD", "birdbath2"),
+		CacheDir:  getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "ipcam-browser-cache")),
 	}
+
+	// Initialize cache
+	var err error
+	mediaCache, err = NewMediaCache(config.CacheDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize cache: %v", err)
+	}
+	log.Printf("Cache directory: %s", config.CacheDir)
 
 	http.HandleFunc("/api/media", handleGetMedia)
 	http.HandleFunc("/api/proxy", handleProxy)
@@ -105,10 +273,32 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine file extension for cache key
+	ext := filepath.Ext(targetURL)
+	if ext == "" {
+		ext = ".bin" // fallback for files without extension
+	}
+
+	// Try to get from cache, or fetch if not cached
+	cachedPath, err := mediaCache.Get(targetURL, ext, func() ([]byte, error) {
+		return fetchFromCamera(targetURL)
+	})
+
+	if err != nil {
+		log.Printf("Cache error for %s: %v", targetURL, err)
+		http.Error(w, "Failed to fetch media", http.StatusInternalServerError)
+		return
+	}
+
+	// Serve the cached file
+	http.ServeFile(w, r, cachedPath)
+}
+
+// fetchFromCamera downloads a file from the camera
+func fetchFromCamera(targetURL string) ([]byte, error) {
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
-		http.Error(w, "Failed to create request", http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Basic "+basicAuth(config.Username, config.Password))
@@ -116,20 +306,20 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, "Failed to fetch from camera", http.StatusBadGateway)
-		return
+		return nil, fmt.Errorf("failed to fetch from camera: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Copy headers
-	for key, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("camera returned status %d", resp.StatusCode)
 	}
 
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	return data, nil
 }
 
 func handleVideoProxy(w http.ResponseWriter, r *http.Request) {
@@ -154,66 +344,52 @@ func handleVideoProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch the raw video from camera
-	req, err := http.NewRequest("GET", targetURL, nil)
+	// Try to get converted video from cache, or convert if not cached
+	cachedPath, err := mediaCache.GetWithFile(targetURL, ".mp4", func(destPath string) error {
+		return convertVideoToMP4(targetURL, destPath)
+	})
+
 	if err != nil {
-		http.Error(w, "Failed to create request", http.StatusInternalServerError)
+		log.Printf("Video conversion error for %s: %v", targetURL, err)
+		http.Error(w, "Failed to convert video", http.StatusInternalServerError)
 		return
 	}
 
-	req.Header.Set("Authorization", "Basic "+basicAuth(config.Username, config.Password))
+	// Serve the cached converted video
+	http.ServeFile(w, r, cachedPath)
+}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+// convertVideoToMP4 downloads a raw video from camera and converts it to MP4
+func convertVideoToMP4(sourceURL string, destPath string) error {
+	// Download raw video from camera
+	rawData, err := fetchFromCamera(sourceURL)
 	if err != nil {
-		log.Printf("Failed to fetch video from camera: %v", err)
-		http.Error(w, "Failed to fetch from camera", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, fmt.Sprintf("Camera returned status %d", resp.StatusCode), resp.StatusCode)
-		return
+		return fmt.Errorf("failed to fetch video: %w", err)
 	}
 
 	// Determine input format based on file extension
 	inputFormat := "h264"
-	if strings.HasSuffix(decodedPath, ".265") {
+	if strings.HasSuffix(sourceURL, ".265") {
 		inputFormat = "hevc"
 	}
 
-	// Create a temporary file to hold the raw video
-	tempFile, err := os.CreateTemp("", "camera-video-*."+inputFormat)
+	// Create temporary file for raw video
+	tempFile, err := os.CreateTemp("", "raw-video-*."+inputFormat)
 	if err != nil {
-		log.Printf("Failed to create temp file: %v", err)
-		http.Error(w, "Failed to process video", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
-	// Download the entire video first
-	_, err = io.Copy(tempFile, resp.Body)
-	if err != nil {
-		log.Printf("Failed to download video: %v", err)
-		http.Error(w, "Failed to download video", http.StatusBadGateway)
-		return
+	// Write raw video to temp file
+	if _, err := tempFile.Write(rawData); err != nil {
+		return fmt.Errorf("failed to write raw video: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("failed to close raw video file: %w", err)
 	}
 
-	// Create a second temp file for the MP4 output
-	// We need to use a temp file (not pipe) to support +faststart flag
-	outputFile, err := os.CreateTemp("", "camera-mp4-*.mp4")
-	if err != nil {
-		log.Printf("Failed to create output temp file: %v", err)
-		http.Error(w, "Failed to process video", http.StatusInternalServerError)
-		return
-	}
-	defer os.Remove(outputFile.Name())
-	defer outputFile.Close()
-
-	// Convert to browser-compatible MP4 using remux (no re-encoding)
-	// Use aggressive error handling to deal with corrupted parameter sets from camera
+	// Convert to MP4 using ffmpeg
 	cmd := exec.Command("ffmpeg",
 		"-y", // Overwrite output file without asking
 		"-loglevel", "error", // Only show errors (reduce log noise)
@@ -226,47 +402,19 @@ func handleVideoProxy(w http.ResponseWriter, r *http.Request) {
 		"-c:v", "copy", // Copy codec (no re-encoding)
 		"-movflags", "+faststart", // Put moov atom at start for better compatibility
 		"-f", "mp4", // Output format
-		outputFile.Name(), // Write to temp output file
+		destPath, // Write directly to destination
 	)
 
 	// Run ffmpeg and capture errors
 	errOutput, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("ffmpeg error: %v, output: %s", err, string(errOutput))
-		http.Error(w, "Failed to convert video", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("ffmpeg failed: %v, output: %s", err, string(errOutput))
 	}
 	if len(errOutput) > 0 {
-		log.Printf("ffmpeg warnings: %s", string(errOutput))
+		log.Printf("ffmpeg warnings for %s: %s", sourceURL, string(errOutput))
 	}
 
-	// Reopen the output file for reading
-	outputFile.Close()
-	finalFile, err := os.Open(outputFile.Name())
-	if err != nil {
-		log.Printf("Failed to open converted video: %v", err)
-		http.Error(w, "Failed to read converted video", http.StatusInternalServerError)
-		return
-	}
-	defer finalFile.Close()
-
-	// Get file info for Content-Length header
-	fileInfo, err := finalFile.Stat()
-	if err != nil {
-		log.Printf("Failed to stat converted video: %v", err)
-		http.Error(w, "Failed to read video info", http.StatusInternalServerError)
-		return
-	}
-
-	// Set headers
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
-
-	// Stream the MP4 file to the response
-	_, err = io.Copy(w, finalFile)
-	if err != nil {
-		log.Printf("Failed to stream video: %v", err)
-	}
+	return nil
 }
 
 func fetchAllMedia() ([]MediaItem, error) {

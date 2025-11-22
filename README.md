@@ -9,6 +9,7 @@ A web application for browsing and viewing IP camera recordings and snapshots wi
 - 🖼️ Gallery view with thumbnails
 - 🎬 Built-in video player for H.264 (.264) and H.265 (.265) files
 - 🔄 On-the-fly video remuxing (raw H.264/H.265 → MP4) with aggressive error handling
+- 💾 Thread-safe caching system for images and converted videos
 - 🔐 HTTP Basic Authentication support
 - 📦 Single self-contained binary (frontend embedded with go:embed)
 - 🚀 CORS-free proxy architecture
@@ -60,6 +61,7 @@ Configuration is done via environment variables:
 - `CAMERA_USERNAME` - Camera username (default: `admin`)
 - `CAMERA_PASSWORD` - Camera password (default: `birdbath2`)
 - `PORT` - Server port (default: `8080`)
+- `CACHE_DIR` - Directory for caching media files (default: `/tmp/ipcam-browser-cache`)
 
 ## Architecture
 
@@ -231,13 +233,25 @@ curl "http://localhost:8080/api/proxy?url=http://192.168.205.196/web/sd/20251122
 - ✅ Safari
 - ⚠️ H.265 video playback may not be supported in all browsers
 
+## Caching
+
+The application implements a thread-safe caching system for all media files:
+
+- **Images**: Cached on first request to reduce camera load
+- **Videos**: Converted MP4 files are cached to avoid repeated ffmpeg processing
+- **Cache Directory**: Configurable via `CACHE_DIR` environment variable
+- **Concurrency Safety**: Uses file locks and atomic operations to prevent race conditions
+- **Cache Key**: SHA-256 hash of the source URL ensures uniqueness
+
+The cache persists across server restarts (if using a persistent directory) and dramatically improves performance for repeated access.
+
 ## Known Issues
 
 The camera outputs raw H.264/H.265 bitstreams with corrupted or missing Picture Parameter Sets (PPS). The application handles this by:
 - Using aggressive ffmpeg error handling during remuxing
 - Generating timestamps from the bitstream
 - Discarding corrupt packets while preserving playable content
-- Creating fragmented MP4 containers that browsers can progressively load
+- Creating standard MP4 containers with `+faststart` for maximum compatibility
 
 Video playback works in modern browsers despite these issues thanks to their built-in error recovery mechanisms.
 
