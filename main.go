@@ -184,11 +184,16 @@ func handleVideoProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Use ffmpeg to remux raw H.264/H.265 to MP4
+	// Add error concealment and browser-compatible settings
 	cmd := exec.Command("ffmpeg",
+		"-loglevel", "error", // Only show errors
+		"-err_detect", "ignore_err", // Ignore decoding errors
+		"-fflags", "+genpts", // Generate presentation timestamps
 		"-f", inputFormat, // Input format
 		"-i", "pipe:0", // Read from stdin
-		"-c", "copy", // Don't re-encode, just remux
-		"-movflags", "frag_keyframe+empty_moov", // Enable streaming
+		"-c:v", "copy", // Don't re-encode video
+		"-movflags", "frag_keyframe+empty_moov+default_base_moof", // Fragmented MP4 for streaming
+		"-max_muxing_queue_size", "1024", // Increase buffer
 		"-f", "mp4", // Output format
 		"pipe:1", // Write to stdout
 	)
