@@ -1,0 +1,22 @@
+# Binaries
+ipcam-browser
+ipcam-browser-*
+*.exe
+
+# Go
+go.sum
+
+# OS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Test files
+test.jpg
+test.mp4
