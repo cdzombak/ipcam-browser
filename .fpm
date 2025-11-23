@@ -1,0 +1,6 @@
+-s dir
+--name ipcam-browser
+--description "Browse and view recordings from IP cameras with web UI"
+--url "https://github.com/cdzombak/ipcam-browser"
+--maintainer "Chris Dzombak <https://www.dzombak.com>"
+--license MIT

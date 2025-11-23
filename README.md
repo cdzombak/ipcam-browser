@@ -15,9 +15,58 @@ A web application for browsing and viewing IP camera recordings and snapshots wi
 - 🚀 CORS-free proxy architecture
 - 📱 Responsive design
 
-## Prerequisites
+## Installation
 
-- **Go 1.21+** - For building the application
+### Debian/Ubuntu (via apt repository)
+
+```bash
+# Add repository
+echo "deb http://dist.cdzombak.net/deb_oss any oss" | sudo tee /etc/apt/sources.list.d/dist-cdzombak-net-deb-oss.list
+sudo apt update
+
+# Install
+sudo apt install ipcam-browser
+```
+
+**Note:** You'll also need to install ffmpeg: `sudo apt install ffmpeg`
+
+### macOS (via Homebrew)
+
+```bash
+brew install cdzombak/oss/ipcam-browser
+```
+
+**Note:** ffmpeg is automatically installed as a dependency.
+
+### Docker
+
+Docker images are available on both GitHub Container Registry and Docker Hub:
+
+```bash
+# Using Docker Hub
+docker pull cdzombak/ipcam-browser:latest
+
+# Using GitHub Container Registry
+docker pull ghcr.io/cdzombak/ipcam-browser:latest
+
+# Run the container
+docker run -d \
+  -p 8080:8080 \
+  -e CAMERA_URL=http://your-camera-ip/web/sd \
+  -e CAMERA_USERNAME=admin \
+  -e CAMERA_PASSWORD=your-password \
+  -e CAMERA_NAME=your-camera-name \
+  -v ipcam-cache:/var/cache/ipcam-browser \
+  cdzombak/ipcam-browser:latest
+```
+
+**Note:** The Docker image includes ffmpeg and ffprobe for video processing.
+
+### Manual Download
+
+Download pre-built binaries from the [releases page](https://github.com/cdzombak/ipcam-browser/releases).
+
+**Prerequisites:**
 - **ffmpeg** - Required for video remuxing (must be in PATH)
 
 Install ffmpeg:
@@ -60,8 +109,10 @@ Configuration is done via environment variables:
 - `CAMERA_URL` - Base URL to camera SD card (default: `http://192.168.205.196/web/sd`)
 - `CAMERA_USERNAME` - Camera username (default: `admin`)
 - `CAMERA_PASSWORD` - Camera password (default: `birdbath2`)
+- `CAMERA_NAME` - Display name for your camera (default: `camera`)
 - `PORT` - Server port (default: `8080`)
 - `CACHE_DIR` - Directory for caching media files (default: `/tmp/ipcam-browser-cache`)
+- `MAX_CONCURRENT_CONVERSIONS` - Maximum parallel video conversions (default: `3`)
 
 ## Architecture
 

@@ -2,6 +2,7 @@
 ipcam-browser
 ipcam-browser-*
 *.exe
+out/
 
 # Go
 go.sum

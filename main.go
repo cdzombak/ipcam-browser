@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -22,6 +23,8 @@ import (
 
 	"golang.org/x/net/html"
 )
+
+var version = "<dev>"
 
 //go:embed static
 var staticFiles embed.FS
@@ -205,6 +208,15 @@ var config Config
 var mediaCache *MediaCache
 
 func main() {
+	// Parse flags
+	showVersion := flag.Bool("version", false, "Show version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+
 	// Load config from environment
 	config = Config{
 		CameraURL:               getEnv("CAMERA_URL", "http://192.168.205.196/web/sd"),
