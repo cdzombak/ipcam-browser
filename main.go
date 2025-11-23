@@ -410,7 +410,8 @@ func convertVideoToMP4(sourceURL string, destPath string) error {
 		"-err_detect", "ignore_err", // Ignore decoding errors
 		"-max_error_rate", "1.0", // Allow up to 100% error rate
 		"-i", tempFile.Name(), // Input file
-		"-c:v", "copy", // Copy codec (no re-encoding)
+		"-c:v", "copy", // Copy video codec (no re-encoding)
+		"-c:a", "copy", // Copy audio codec (preserve audio if present)
 		"-movflags", "+faststart", // Put moov atom at start for better compatibility
 		"-f", "mp4", // Output format
 		destPath, // Write directly to destination
