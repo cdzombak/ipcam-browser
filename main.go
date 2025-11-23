@@ -113,7 +113,9 @@ func (c *MediaCache) Get(url string, suffix string, fetchFunc func() ([]byte, er
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tempPath := tempFile.Name()
-	defer os.Remove(tempPath) // Clean up temp file if rename fails
+	defer func() {
+		_ = os.Remove(tempPath) // Clean up temp file if rename fails
+	}()
 
 	if _, err := tempFile.Write(data); err != nil {
 		tempFile.Close()
@@ -166,7 +168,9 @@ func (c *MediaCache) GetWithFile(url string, suffix string, fetchFunc func(destP
 	}
 	tempPath := tempFile.Name()
 	tempFile.Close()
-	defer os.Remove(tempPath)
+	defer func() {
+		_ = os.Remove(tempPath)
+	}()
 
 	// Fetch directly to temp file
 	if err := fetchFunc(tempPath); err != nil {
@@ -260,9 +264,11 @@ func handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"cameraName": config.CameraName,
-	})
+	}); err != nil {
+		log.Printf("Error encoding config response: %v", err)
+	}
 }
 
 func handleGetMedia(w http.ResponseWriter, r *http.Request) {
@@ -279,7 +285,9 @@ func handleGetMedia(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(media)
+	if err := json.NewEncoder(w).Encode(media); err != nil {
+		log.Printf("Error encoding media response: %v", err)
+	}
 }
 
 func handleProxy(w http.ResponseWriter, r *http.Request) {
@@ -463,7 +471,7 @@ func detectFPS(path string) int {
 // parseFloat safely parses a string to float64, returning 0 on error
 func parseFloat(s string) float64 {
 	f := 0.0
-	fmt.Sscanf(s, "%f", &f)
+	_, _ = fmt.Sscanf(s, "%f", &f)
 	return f
 }
 
@@ -489,7 +497,9 @@ func convertVideoToMP4(sourceURL string, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer os.Remove(tempFile.Name())
+	defer func() {
+		_ = os.Remove(tempFile.Name())
+	}()
 	defer tempFile.Close()
 
 	// Write cleaned video to temp file
@@ -968,6 +978,6 @@ func getEnvInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	intValue := defaultValue
-	fmt.Sscanf(value, "%d", &intValue)
+	_, _ = fmt.Sscanf(value, "%d", &intValue)
 	return intValue
 }
