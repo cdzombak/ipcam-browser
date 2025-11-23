@@ -370,6 +370,88 @@ func handleVideoProxy(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, cachedPath)
 }
 
+// stripHXVSHeaders removes HXVS/HXVF 16-byte headers from raw H.264/H.265 stream
+// These proprietary headers prevent the video from playing in most video players
+func stripHXVSHeaders(data []byte) []byte {
+	out := make([]byte, 0, len(data))
+	i := 0
+	removed := 0
+	length := len(data)
+
+	for i < length {
+		// Check for HXVS or HXVF header (4 bytes + 12 more = 16 bytes total)
+		if i+16 <= length {
+			header := data[i : i+4]
+			if string(header) == "HXVS" || string(header) == "HXVF" {
+				// Skip the 16-byte header
+				i += 16
+				removed += 16
+				continue
+			}
+		}
+		out = append(out, data[i])
+		i++
+	}
+
+	if removed > 0 {
+		log.Printf("Stripped %d bytes of HXVS/HXVF headers from video", removed)
+	}
+
+	return out
+}
+
+// detectFPS tries to detect the frame rate from a video file using ffprobe
+// Returns the detected FPS or 0 if detection fails
+func detectFPS(path string) int {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=r_frame_rate,avg_frame_rate",
+		"-of", "default=nk=1:nw=1",
+		path,
+	)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	// Parse frame rate from output (format: "num/den" or "fps")
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "/") {
+			// Format: "30000/1001" or "25/1"
+			parts := strings.Split(line, "/")
+			if len(parts) == 2 {
+				num := parseFloat(parts[0])
+				den := parseFloat(parts[1])
+				if den != 0 {
+					fps := num / den
+					if fps > 0 {
+						return int(fps + 0.5) // Round to nearest int
+					}
+				}
+			}
+		} else {
+			// Format: "25.0" or "30"
+			fps := parseFloat(line)
+			if fps > 0 {
+				return int(fps + 0.5)
+			}
+		}
+	}
+
+	return 0
+}
+
+// parseFloat safely parses a string to float64, returning 0 on error
+func parseFloat(s string) float64 {
+	f := 0.0
+	fmt.Sscanf(s, "%f", &f)
+	return f
+}
+
 // convertVideoToMP4 downloads a raw video from camera and converts it to MP4
 func convertVideoToMP4(sourceURL string, destPath string) error {
 	// Download raw video from camera
@@ -378,43 +460,50 @@ func convertVideoToMP4(sourceURL string, destPath string) error {
 		return fmt.Errorf("failed to fetch video: %w", err)
 	}
 
+	// Strip HXVS/HXVF headers that prevent playback in most video players
+	cleanedData := stripHXVSHeaders(rawData)
+
 	// Determine input format based on file extension
 	inputFormat := "h264"
 	if strings.HasSuffix(sourceURL, ".265") {
 		inputFormat = "hevc"
 	}
 
-	// Create temporary file for raw video
-	tempFile, err := os.CreateTemp("", "raw-video-*."+inputFormat)
+	// Create temporary file for cleaned video
+	tempFile, err := os.CreateTemp("", "clean-video-*."+inputFormat)
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
-	// Write raw video to temp file
-	if _, err := tempFile.Write(rawData); err != nil {
-		return fmt.Errorf("failed to write raw video: %w", err)
+	// Write cleaned video to temp file
+	if _, err := tempFile.Write(cleanedData); err != nil {
+		return fmt.Errorf("failed to write cleaned video: %w", err)
 	}
 	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("failed to close raw video file: %w", err)
+		return fmt.Errorf("failed to close temp file: %w", err)
 	}
 
-	// Convert to MP4 using ffmpeg
+	// Detect frame rate from the cleaned video
+	fps := detectFPS(tempFile.Name())
+	if fps == 0 {
+		fps = 20 // Default fallback
+		log.Printf("Could not detect FPS for %s, defaulting to 20", sourceURL)
+	} else {
+		log.Printf("Detected FPS for %s: %d", sourceURL, fps)
+	}
+
+	// Convert to MP4 using ffmpeg with proper framerate
 	cmd := exec.Command("ffmpeg",
-		"-y", // Overwrite output file without asking
-		"-loglevel", "error", // Only show errors (reduce log noise)
-		"-analyzeduration", "100M", // Analyze more data to find codec parameters
-		"-probesize", "100M", // Read more data when probing
-		"-fflags", "+genpts+discardcorrupt+igndts", // Generate PTS, discard corrupt packets, ignore DTS
-		"-err_detect", "ignore_err", // Ignore decoding errors
-		"-max_error_rate", "1.0", // Allow up to 100% error rate
-		"-i", tempFile.Name(), // Input file
-		"-c:v", "copy", // Copy video codec (no re-encoding)
-		"-c:a", "copy", // Copy audio codec (preserve audio if present)
-		"-movflags", "+faststart", // Put moov atom at start for better compatibility
-		"-f", "mp4", // Output format
-		destPath, // Write directly to destination
+		"-y",                       // Overwrite output file without asking
+		"-fflags", "+genpts",       // Generate presentation timestamps
+		"-framerate", fmt.Sprintf("%d", fps), // Set input framerate
+		"-i", tempFile.Name(),      // Input file
+		"-c:v", "copy",             // Copy video codec (no re-encoding)
+		"-c:a", "copy",             // Copy audio codec (preserve audio if present)
+		"-movflags", "+faststart",  // Put moov atom at start for better compatibility
+		destPath,                   // Output file
 	)
 
 	// Run ffmpeg and capture errors
@@ -423,7 +512,7 @@ func convertVideoToMP4(sourceURL string, destPath string) error {
 		return fmt.Errorf("ffmpeg failed: %v, output: %s", err, string(errOutput))
 	}
 	if len(errOutput) > 0 {
-		log.Printf("ffmpeg warnings for %s: %s", sourceURL, string(errOutput))
+		log.Printf("ffmpeg output for %s: %s", sourceURL, string(errOutput))
 	}
 
 	return nil
