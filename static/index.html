@@ -503,11 +503,25 @@
             }
 
             groupByDate(media) {
-                return media.reduce((acc, item) => {
+                const grouped = media.reduce((acc, item) => {
                     if (!acc[item.date]) acc[item.date] = [];
                     acc[item.date].push(item);
                     return acc;
                 }, {});
+
+                // Sort items within each date by timestamp
+                Object.keys(grouped).forEach(date => {
+                    grouped[date].sort((a, b) => {
+                        // Extract start time from timestamp
+                        // For images: "2025-11-21 21:23:56"
+                        // For videos: "2025-11-21 21:23:56 - 21:24:10"
+                        const timeA = a.timestamp.split(' - ')[0];
+                        const timeB = b.timestamp.split(' - ')[0];
+                        return timeA.localeCompare(timeB);
+                    });
+                });
+
+                return grouped;
             }
 
             renderMediaCard(media) {
