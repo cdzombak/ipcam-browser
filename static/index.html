@@ -374,6 +374,7 @@
                 document.getElementById('triggerFilter').addEventListener('change', () => this.applyFilters());
                 document.getElementById('sortOrder').addEventListener('change', (e) => {
                     this.sortOrder = e.target.value;
+                    this.sortFilteredMedia(); // Re-sort the array for arrow key navigation
                     this.render();
                 });
 
@@ -456,8 +457,28 @@
                     return true;
                 });
 
+                // Sort filtered media by timestamp to match display order
+                this.sortFilteredMedia();
+
                 this.updateStats();
                 this.render();
+            }
+
+            sortFilteredMedia() {
+                // Sort by date and timestamp
+                this.filteredMedia.sort((a, b) => {
+                    // First compare dates
+                    const dateCompare = a.date.localeCompare(b.date);
+                    if (dateCompare !== 0) {
+                        return this.sortOrder === 'desc' ? -dateCompare : dateCompare;
+                    }
+
+                    // If same date, compare timestamps
+                    const timeA = a.timestamp.split(' - ')[0];
+                    const timeB = b.timestamp.split(' - ')[0];
+                    const timeCompare = timeA.localeCompare(timeB);
+                    return this.sortOrder === 'desc' ? -timeCompare : timeCompare;
+                });
             }
 
             updateStats() {
