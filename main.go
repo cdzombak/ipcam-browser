@@ -36,10 +36,9 @@ type Config struct {
 
 // MediaCache handles thread-safe caching of media files
 type MediaCache struct {
-	dir        string
-	inFlight   sync.Map      // tracks in-flight operations to prevent duplicate work
-	locks      sync.Map      // per-file mutexes for cache operations
-	cameraSem  chan struct{} // semaphore to limit concurrent camera requests
+	dir       string
+	locks     sync.Map      // per-file mutexes for cache operations
+	cameraSem chan struct{} // semaphore to limit concurrent camera requests
 }
 
 // NewMediaCache creates a new cache instance
@@ -76,34 +75,27 @@ func (c *MediaCache) Get(url string, suffix string, fetchFunc func() ([]byte, er
 	cachePath := c.getCachePath(url, suffix)
 	cacheKey := c.getCacheKey(url, suffix)
 
-	// Fast path: check if file exists in cache
+	// Fast path: check if file exists in cache (no lock needed)
 	if _, err := os.Stat(cachePath); err == nil {
 		return cachePath, nil
 	}
 
-	// Get the lock for this specific cache key
+	// Get the lock for this specific cache key to serialize processing
 	fileLock := c.getFileLock(cacheKey)
 	fileLock.Lock()
 	defer fileLock.Unlock()
 
 	// Double-check: file might have been created while we waited for lock
+	// This is the key optimization - if another goroutine already processed it,
+	// we just return the path without doing any work
 	if _, err := os.Stat(cachePath); err == nil {
 		return cachePath, nil
 	}
 
-	// Check if another goroutine is already fetching this file
-	if _, inFlight := c.inFlight.LoadOrStore(cacheKey, true); inFlight {
-		// Wait briefly and check again - another goroutine is handling this
-		fileLock.Unlock()
-		// Small sleep to allow the other goroutine to finish
-		// Note: this is a simplification; proper implementation might use channels
-		fileLock.Lock()
-		if _, err := os.Stat(cachePath); err == nil {
-			c.inFlight.Delete(cacheKey)
-			return cachePath, nil
-		}
-	}
-	defer c.inFlight.Delete(cacheKey)
+	// At this point, we hold the lock and the file doesn't exist
+	// We are the only goroutine that will process this file
+	// Any other goroutines will wait on the lock above, then hit the
+	// double-check and return immediately
 
 	// Fetch the file
 	data, err := fetchFunc()
@@ -141,31 +133,27 @@ func (c *MediaCache) GetWithFile(url string, suffix string, fetchFunc func(destP
 	cachePath := c.getCachePath(url, suffix)
 	cacheKey := c.getCacheKey(url, suffix)
 
-	// Fast path: check if file exists in cache
+	// Fast path: check if file exists in cache (no lock needed)
 	if _, err := os.Stat(cachePath); err == nil {
 		return cachePath, nil
 	}
 
-	// Get the lock for this specific cache key
+	// Get the lock for this specific cache key to serialize processing
 	fileLock := c.getFileLock(cacheKey)
 	fileLock.Lock()
 	defer fileLock.Unlock()
 
 	// Double-check: file might have been created while we waited for lock
+	// This is the key optimization - if another goroutine already processed it,
+	// we just return the path without doing any work
 	if _, err := os.Stat(cachePath); err == nil {
 		return cachePath, nil
 	}
 
-	// Check if another goroutine is already fetching this file
-	if _, inFlight := c.inFlight.LoadOrStore(cacheKey, true); inFlight {
-		fileLock.Unlock()
-		fileLock.Lock()
-		if _, err := os.Stat(cachePath); err == nil {
-			c.inFlight.Delete(cacheKey)
-			return cachePath, nil
-		}
-	}
-	defer c.inFlight.Delete(cacheKey)
+	// At this point, we hold the lock and the file doesn't exist
+	// We are the only goroutine that will process this file
+	// Any other goroutines will wait on the lock above, then hit the
+	// double-check and return immediately
 
 	// Create temporary file
 	tempFile, err := os.CreateTemp(c.dir, "temp-*"+suffix)
