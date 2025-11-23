@@ -355,6 +355,7 @@
                 this.currentIndex = -1;
 
                 this.initEventListeners();
+                this.loadMedia();
             }
 
             initEventListeners() {
@@ -541,21 +542,22 @@
                     modalMedia.innerHTML = `
                         <img src="${mediaUrl}" alt="${media.name}">
                         <div class="modal-video-actions">
-                            <a class="action-btn" href="${mediaUrl}" download="${media.name || 'image'}">Download image</a>
+                            <a class="action-btn" href="${mediaUrl}" download="${media.downloadFilename || media.name}">Download image</a>
                         </div>
                     `;
                 } else {
                     // Use proxyUrl for videos (remuxed to MP4)
                     const videoUrl = media.proxyUrl || `/api/proxy?url=${encodeURIComponent(media.url)}`;
+                    const downloadName = media.downloadFilename || media.name;
                     modalMedia.innerHTML = `
                         <video id="modalVideo" controls autoplay style="max-width: 100%; max-height: 70vh;">
                             <source src="${videoUrl}" type="video/mp4">
                             Your browser doesn't support video playback.
-                            <a href="${videoUrl}" download>Download video</a>
+                            <a href="${videoUrl}" download="${downloadName}">Download video</a>
                         </video>
                         <div class="modal-video-actions">
                             <button id="playbackToggle" class="action-btn secondary" type="button">Fast playback: On (2×)</button>
-                            <a id="downloadVideo" class="action-btn" href="${videoUrl}" download>Download video</a>
+                            <a id="downloadVideo" class="action-btn" href="${videoUrl}" download="${downloadName}">Download video</a>
                         </div>
                     `;
 
