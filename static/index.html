@@ -554,7 +554,7 @@
                             <a href="${videoUrl}" download>Download video</a>
                         </video>
                         <div class="modal-video-actions">
-                            <button id="playbackToggle" class="action-btn secondary" type="button">Fast playback: On (3×)</button>
+                            <button id="playbackToggle" class="action-btn secondary" type="button">Fast playback: On (2×)</button>
                             <a id="downloadVideo" class="action-btn" href="${videoUrl}" download>Download video</a>
                         </div>
                     `;
@@ -564,11 +564,11 @@
 
                     let fastPlaybackEnabled = true;
                     const applyPlaybackRate = () => {
-                        videoElement.playbackRate = fastPlaybackEnabled ? 3 : 1;
+                        videoElement.playbackRate = fastPlaybackEnabled ? 2 : 1;
                     };
                     const updateToggleLabel = () => {
                         playbackToggle.textContent = fastPlaybackEnabled
-                            ? 'Fast playback: On (3×)'
+                            ? 'Fast playback: On (2×)'
                             : 'Fast playback: Off (1×)';
                     };
 
