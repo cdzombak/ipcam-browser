@@ -49,7 +49,11 @@ docker pull cdzombak/ipcam-browser:latest
 # Using GitHub Container Registry
 docker pull ghcr.io/cdzombak/ipcam-browser:latest
 
-# Run the container
+# Run with Docker Compose (recommended)
+# Edit docker-compose.yml with your camera settings, then:
+docker compose up -d
+
+# Or run directly with docker run:
 docker run -d \
   -p 8080:8080 \
   -e CAMERA_URL=http://your-camera-ip/web/sd \
@@ -60,7 +64,7 @@ docker run -d \
   cdzombak/ipcam-browser:latest
 ```
 
-**Note:** The Docker image includes ffmpeg and ffprobe for video processing.
+**Note:** The Docker image includes ffmpeg and ffprobe for video processing. See [`docker-compose.yml`](docker-compose.yml) for a complete example with all configuration options.
 
 ### Manual Download
 

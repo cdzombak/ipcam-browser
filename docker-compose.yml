@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  ipcam-browser:
+    image: cdzombak/ipcam-browser:latest
+    # Or use GitHub Container Registry:
+    # image: ghcr.io/cdzombak/ipcam-browser:latest
+
+    container_name: ipcam-browser
+
+    ports:
+      - "8080:8080"  # Host:Container - Map host port 8080 to container port 8080
+
+    environment:
+      # Camera connection settings
+      CAMERA_URL: "http://192.168.1.100/web/sd"  # Base URL to camera's SD card web interface
+      CAMERA_USERNAME: "admin"                     # Camera login username
+      CAMERA_PASSWORD: "your-secure-password"      # Camera login password
+
+      # Display settings
+      CAMERA_NAME: "Front Door Camera"             # Display name shown in UI (default: "camera")
+
+      # Server settings
+      PORT: "8080"                                  # HTTP server port (default: 8080)
+
+      # Cache settings
+      CACHE_DIR: "/var/cache/ipcam-browser"        # Cache directory for converted videos and images
+
+      # Performance settings
+      MAX_CONCURRENT_CONVERSIONS: "3"              # Max parallel video conversions (default: 3)
+                                                    # Increase for faster processing, decrease to reduce CPU load
+
+    volumes:
+      # Persist cache across container restarts
+      - ipcam-cache:/var/cache/ipcam-browser
+
+    restart: unless-stopped
+
+    # Optional: limit resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2.0'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 512M
+
+volumes:
+  ipcam-cache:
+    driver: local
