@@ -297,8 +297,7 @@
 </head>
 <body>
     <div class="header">
-        <h1>📹 IP Camera Browser</h1>
-        <p>Browse and view your camera recordings and snapshots</p>
+        <h1>IP Camera Browser: <span id="cameraName">Loading...</span></h1>
     </div>
 
     <div class="controls">
@@ -363,7 +362,21 @@
                 this.sortOrder = 'desc'; // 'desc' for newest first, 'asc' for oldest first
 
                 this.initEventListeners();
+                this.loadConfig();
                 this.loadMedia();
+            }
+
+            async loadConfig() {
+                try {
+                    const response = await fetch('/api/config');
+                    if (response.ok) {
+                        const config = await response.json();
+                        document.getElementById('cameraName').textContent = config.cameraName;
+                    }
+                } catch (error) {
+                    console.error('Failed to load config:', error);
+                    document.getElementById('cameraName').textContent = 'camera';
+                }
             }
 
             initEventListeners() {

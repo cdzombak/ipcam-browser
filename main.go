@@ -221,6 +221,7 @@ func main() {
 	}
 	log.Printf("Cache directory: %s", config.CacheDir)
 
+	http.HandleFunc("/api/config", handleGetConfig)
 	http.HandleFunc("/api/media", handleGetMedia)
 	http.HandleFunc("/api/proxy", handleProxy)
 	http.HandleFunc("/api/video/", handleVideoProxy)
@@ -236,6 +237,18 @@ func main() {
 	log.Printf("Starting server on http://localhost:%s", port)
 	log.Printf("Camera URL: %s", config.CameraURL)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
+}
+
+func handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"cameraName": config.CameraName,
+	})
 }
 
 func handleGetMedia(w http.ResponseWriter, r *http.Request) {
