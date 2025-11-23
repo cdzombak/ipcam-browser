@@ -329,6 +329,13 @@
                 <option value="periodic">Periodic</option>
             </select>
         </div>
+        <div class="filter-group">
+            <label for="sortOrder">Sort:</label>
+            <select id="sortOrder">
+                <option value="desc">Newest First</option>
+                <option value="asc">Oldest First</option>
+            </select>
+        </div>
         <div class="stats" id="stats"></div>
     </div>
 
@@ -353,6 +360,7 @@
                 this.allMedia = [];
                 this.filteredMedia = [];
                 this.currentIndex = -1;
+                this.sortOrder = 'desc'; // 'desc' for newest first, 'asc' for oldest first
 
                 this.initEventListeners();
                 this.loadMedia();
@@ -364,6 +372,10 @@
                 document.getElementById('dateFilter').addEventListener('change', () => this.applyFilters());
                 document.getElementById('typeFilter').addEventListener('change', () => this.applyFilters());
                 document.getElementById('triggerFilter').addEventListener('change', () => this.applyFilters());
+                document.getElementById('sortOrder').addEventListener('change', (e) => {
+                    this.sortOrder = e.target.value;
+                    this.render();
+                });
 
                 document.getElementById('modal').addEventListener('click', (e) => {
                     if (e.target.id === 'modal' || e.target.id === 'modalClose') {
@@ -409,7 +421,10 @@
             }
 
             populateDateFilter() {
-                const dates = [...new Set(this.allMedia.map(m => m.date))].sort().reverse();
+                const dates = [...new Set(this.allMedia.map(m => m.date))].sort();
+                if (this.sortOrder === 'desc') {
+                    dates.reverse();
+                }
                 const select = document.getElementById('dateFilter');
 
                 select.innerHTML = '<option value="">All Dates</option>';
@@ -461,7 +476,10 @@
                 }
 
                 const byDate = this.groupByDate(this.filteredMedia);
-                const dates = Object.keys(byDate).sort().reverse();
+                const dates = Object.keys(byDate).sort();
+                if (this.sortOrder === 'desc') {
+                    dates.reverse();
+                }
 
                 content.innerHTML = dates.map(date => `
                     <div class="date-section">
