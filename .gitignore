@@ -4,9 +4,6 @@ ipcam-browser-*
 *.exe
 out/
 
-# Go
-go.sum
-
 # OS
 .DS_Store
 *.swp
