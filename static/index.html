@@ -543,7 +543,7 @@
                     return acc;
                 }, {});
 
-                // Sort items within each date by timestamp
+                // Sort items within each date by timestamp, respecting sort order
                 Object.keys(grouped).forEach(date => {
                     grouped[date].sort((a, b) => {
                         // Extract start time from timestamp
@@ -551,7 +551,8 @@
                         // For videos: "2025-11-21 21:23:56 - 21:24:10"
                         const timeA = a.timestamp.split(' - ')[0];
                         const timeB = b.timestamp.split(' - ')[0];
-                        return timeA.localeCompare(timeB);
+                        const timeCompare = timeA.localeCompare(timeB);
+                        return this.sortOrder === 'desc' ? -timeCompare : timeCompare;
                     });
                 });
 
