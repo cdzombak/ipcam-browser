@@ -27,11 +27,12 @@ import (
 var staticFiles embed.FS
 
 type Config struct {
-	CameraURL  string
-	CameraName string
-	Username   string
-	Password   string
-	CacheDir   string
+	CameraURL               string
+	CameraName              string
+	Username                string
+	Password                string
+	CacheDir                string
+	MaxConcurrentConversions int
 }
 
 // MediaCache handles thread-safe caching of media files
@@ -206,11 +207,12 @@ var mediaCache *MediaCache
 func main() {
 	// Load config from environment
 	config = Config{
-		CameraURL:  getEnv("CAMERA_URL", "http://192.168.205.196/web/sd"),
-		CameraName: getEnv("CAMERA_NAME", "camera"),
-		Username:   getEnv("CAMERA_USERNAME", "admin"),
-		Password:   getEnv("CAMERA_PASSWORD", "birdbath2"),
-		CacheDir:   getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "ipcam-browser-cache")),
+		CameraURL:               getEnv("CAMERA_URL", "http://192.168.205.196/web/sd"),
+		CameraName:              getEnv("CAMERA_NAME", "camera"),
+		Username:                getEnv("CAMERA_USERNAME", "admin"),
+		Password:                getEnv("CAMERA_PASSWORD", "birdbath2"),
+		CacheDir:                getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "ipcam-browser-cache")),
+		MaxConcurrentConversions: getEnvInt("MAX_CONCURRENT_CONVERSIONS", 3),
 	}
 
 	// Initialize cache
@@ -552,7 +554,7 @@ func fetchAllMedia() ([]MediaItem, error) {
 // preCacheVideos pre-converts videos to MP4 in the background
 func preCacheVideos(media []MediaItem) {
 	// Create a semaphore to limit concurrent video conversions
-	sem := make(chan struct{}, 2) // Max 2 concurrent conversions
+	sem := make(chan struct{}, config.MaxConcurrentConversions)
 
 	for _, item := range media {
 		if item.Type != "video" {
@@ -946,4 +948,14 @@ func getEnv(key, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	intValue := defaultValue
+	fmt.Sscanf(value, "%d", &intValue)
+	return intValue
 }
