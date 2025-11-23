@@ -27,10 +27,11 @@ import (
 var staticFiles embed.FS
 
 type Config struct {
-	CameraURL string
-	Username  string
-	Password  string
-	CacheDir  string
+	CameraURL  string
+	CameraName string
+	Username   string
+	Password   string
+	CacheDir   string
 }
 
 // MediaCache handles thread-safe caching of media files
@@ -189,17 +190,18 @@ func (c *MediaCache) GetWithFile(url string, suffix string, fetchFunc func(destP
 }
 
 type MediaItem struct {
-	Name         string `json:"name"`
-	Path         string `json:"path"`
-	URL          string `json:"url"`
-	ProxyURL     string `json:"proxyUrl"`
-	ThumbnailURL string `json:"thumbnailUrl,omitempty"`
-	Date         string `json:"date"`
-	Type         string `json:"type"`
-	Trigger      string `json:"trigger"`
-	Timestamp    string `json:"timestamp"`
-	Size         string `json:"size"`
-	Modified     string `json:"modified"`
+	Name             string `json:"name"`
+	Path             string `json:"path"`
+	URL              string `json:"url"`
+	ProxyURL         string `json:"proxyUrl"`
+	ThumbnailURL     string `json:"thumbnailUrl,omitempty"`
+	DownloadFilename string `json:"downloadFilename"`
+	Date             string `json:"date"`
+	Type             string `json:"type"`
+	Trigger          string `json:"trigger"`
+	Timestamp        string `json:"timestamp"`
+	Size             string `json:"size"`
+	Modified         string `json:"modified"`
 }
 
 type DirectoryEntry struct {
@@ -216,10 +218,11 @@ var mediaCache *MediaCache
 func main() {
 	// Load config from environment
 	config = Config{
-		CameraURL: getEnv("CAMERA_URL", "http://192.168.205.196/web/sd"),
-		Username:  getEnv("CAMERA_USERNAME", "admin"),
-		Password:  getEnv("CAMERA_PASSWORD", "birdbath2"),
-		CacheDir:  getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "ipcam-browser-cache")),
+		CameraURL:  getEnv("CAMERA_URL", "http://192.168.205.196/web/sd"),
+		CameraName: getEnv("CAMERA_NAME", "camera"),
+		Username:   getEnv("CAMERA_USERNAME", "admin"),
+		Password:   getEnv("CAMERA_PASSWORD", "birdbath2"),
+		CacheDir:   getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "ipcam-browser-cache")),
 	}
 
 	// Initialize cache
@@ -730,6 +733,46 @@ func parseTableRow(tr *html.Node, basePath string) *DirectoryEntry {
 	}
 }
 
+// generateDownloadFilename creates a filename in format: <camera>_yyyy-MM-dd_HH-mm-ss.ext
+func generateDownloadFilename(timestamp, originalName, mediaType string) string {
+	// Extract the start time from timestamp
+	// For images: "2025-11-21 21:23:56"
+	// For videos: "2025-11-21 21:23:56 - 21:24:10"
+	var timeStr string
+	if strings.Contains(timestamp, " - ") {
+		// Video: use start time
+		timeStr = strings.Split(timestamp, " - ")[0]
+	} else {
+		// Image: use the whole timestamp
+		timeStr = timestamp
+	}
+
+	// Parse the timestamp to reformat it
+	t, err := time.Parse("2006-01-02 15:04:05", timeStr)
+	if err != nil {
+		// If parsing fails, use the original name
+		return originalName
+	}
+
+	// Get file extension
+	ext := filepath.Ext(originalName)
+	if ext == "" {
+		// For files without extension, use defaults
+		if mediaType == "video" {
+			ext = ".mp4"
+		} else {
+			ext = ".jpg"
+		}
+	} else if mediaType == "video" {
+		// Videos are served as MP4, so use .mp4 extension regardless of original
+		ext = ".mp4"
+	}
+
+	// Format as: camera_2025-11-21_21-23-56.ext
+	formatted := t.Format("2006-01-02_15-04-05")
+	return fmt.Sprintf("%s_%s%s", config.CameraName, formatted, ext)
+}
+
 func parseMedia(entry DirectoryEntry, datePath string, mediaType string) MediaItem {
 	name := entry.Name
 	trigger := "periodic"
@@ -747,17 +790,21 @@ func parseMedia(entry DirectoryEntry, datePath string, mediaType string) MediaIt
 		proxyURL = "/api/video/" + encodedPath + ".mp4"
 	}
 
+	// Generate download filename
+	downloadFilename := generateDownloadFilename(timestamp, name, mediaType)
+
 	return MediaItem{
-		Name:      name,
-		Path:      entry.Path,
-		URL:       config.CameraURL + "/" + entry.Path,
-		ProxyURL:  proxyURL,
-		Date:      strings.TrimSuffix(datePath, "/"),
-		Type:      mediaType,
-		Trigger:   trigger,
-		Timestamp: timestamp,
-		Size:      entry.Size,
-		Modified:  entry.Modified,
+		Name:             name,
+		Path:             entry.Path,
+		URL:              config.CameraURL + "/" + entry.Path,
+		ProxyURL:         proxyURL,
+		DownloadFilename: downloadFilename,
+		Date:             strings.TrimSuffix(datePath, "/"),
+		Type:             mediaType,
+		Trigger:          trigger,
+		Timestamp:        timestamp,
+		Size:             entry.Size,
+		Modified:         entry.Modified,
 	}
 }
 
