@@ -159,6 +159,23 @@
             pointer-events: none;
         }
 
+        .video-hover-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+        }
+
+        .video-hover-progress-bar {
+            height: 100%;
+            background: #3498db;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
         .media-info {
             padding: 1rem;
         }
@@ -541,6 +558,8 @@
                     const thumbnail = container.querySelector('img');
                     const videoUrl = card.dataset.videoUrl;
                     let hoverVideo = null;
+                    let progressBar = null;
+                    let progressBarFill = null;
 
                     card.addEventListener('mouseenter', () => {
                         if (!videoUrl || hoverVideo) return;
@@ -554,9 +573,25 @@
                         hoverVideo.playbackRate = 2;
                         hoverVideo.src = videoUrl;
 
-                        // Replace thumbnail with video
+                        // Create progress bar
+                        progressBar = document.createElement('div');
+                        progressBar.className = 'video-hover-progress';
+                        progressBarFill = document.createElement('div');
+                        progressBarFill.className = 'video-hover-progress-bar';
+                        progressBar.appendChild(progressBarFill);
+
+                        // Replace thumbnail with video and add progress bar
                         thumbnail.style.display = 'none';
                         container.appendChild(hoverVideo);
+                        container.appendChild(progressBar);
+
+                        // Update progress bar as video plays
+                        hoverVideo.addEventListener('timeupdate', () => {
+                            if (hoverVideo.duration > 0) {
+                                const progress = (hoverVideo.currentTime / hoverVideo.duration) * 100;
+                                progressBarFill.style.width = progress + '%';
+                            }
+                        });
 
                         // Play when ready
                         hoverVideo.addEventListener('loadeddata', () => {
@@ -573,8 +608,13 @@
                             hoverVideo.src = '';
                             hoverVideo.remove();
                             hoverVideo = null;
-                            thumbnail.style.display = '';
                         }
+                        if (progressBar) {
+                            progressBar.remove();
+                            progressBar = null;
+                            progressBarFill = null;
+                        }
+                        thumbnail.style.display = '';
                     });
                 });
             }
