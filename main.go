@@ -34,9 +34,10 @@ type Config struct {
 
 // MediaCache handles thread-safe caching of media files
 type MediaCache struct {
-	dir       string
-	inFlight  sync.Map // tracks in-flight operations to prevent duplicate work
-	locks     sync.Map // per-file mutexes for cache operations
+	dir        string
+	inFlight   sync.Map      // tracks in-flight operations to prevent duplicate work
+	locks      sync.Map      // per-file mutexes for cache operations
+	cameraSem  chan struct{} // semaphore to limit concurrent camera requests
 }
 
 // NewMediaCache creates a new cache instance
@@ -45,7 +46,8 @@ func NewMediaCache(dir string) (*MediaCache, error) {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 	return &MediaCache{
-		dir: dir,
+		dir:       dir,
+		cameraSem: make(chan struct{}, 3), // Limit to 3 concurrent camera requests
 	}, nil
 }
 
@@ -296,6 +298,10 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 
 // fetchFromCamera downloads a file from the camera
 func fetchFromCamera(targetURL string) ([]byte, error) {
+	// Acquire semaphore to limit concurrent camera requests
+	mediaCache.cameraSem <- struct{}{}
+	defer func() { <-mediaCache.cameraSem }()
+
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -441,7 +447,35 @@ func fetchAllMedia() ([]MediaItem, error) {
 		allMedia = append(allMedia, dateMedia...)
 	}
 
+	// Pre-cache videos in the background for instant playback
+	go preCacheVideos(allMedia)
+
 	return allMedia, nil
+}
+
+// preCacheVideos pre-converts videos to MP4 in the background
+func preCacheVideos(media []MediaItem) {
+	// Create a semaphore to limit concurrent video conversions
+	sem := make(chan struct{}, 2) // Max 2 concurrent conversions
+
+	for _, item := range media {
+		if item.Type != "video" {
+			continue
+		}
+
+		sem <- struct{}{} // Acquire
+		go func(videoURL string) {
+			defer func() { <-sem }() // Release
+
+			// Try to get/create cached MP4 - this will trigger conversion if not cached
+			_, err := mediaCache.GetWithFile(videoURL, ".mp4", func(destPath string) error {
+				return convertVideoToMP4(videoURL, destPath)
+			})
+			if err != nil {
+				log.Printf("Pre-cache failed for %s: %v", videoURL, err)
+			}
+		}(item.URL)
+	}
 }
 
 func fetchDateMedia(datePath string) ([]MediaItem, error) {
@@ -608,10 +642,10 @@ func parseMedia(entry DirectoryEntry, datePath string, mediaType string) MediaIt
 
 	timestamp := parseTimestamp(name, mediaType)
 
-	// Build proxy URL for videos (remux to MP4)
+	// Build proxy URL for videos
 	proxyURL := ""
 	if mediaType == "video" {
-		// URL-encode the path and add .mp4 extension
+		// URL-encode the path and add extensions
 		encodedPath := url.QueryEscape(entry.Path)
 		proxyURL = "/api/video/" + encodedPath + ".mp4"
 	}
