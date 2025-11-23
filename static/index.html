@@ -534,6 +534,49 @@
                         }
                     });
                 });
+
+                // Add hover preview for videos
+                content.querySelectorAll('.media-card[data-type="video"]').forEach(card => {
+                    const container = card.querySelector('[data-preview-container]');
+                    const thumbnail = container.querySelector('img');
+                    const videoUrl = card.dataset.videoUrl;
+                    let hoverVideo = null;
+
+                    card.addEventListener('mouseenter', () => {
+                        if (!videoUrl || hoverVideo) return;
+
+                        // Create video element
+                        hoverVideo = document.createElement('video');
+                        hoverVideo.className = 'media-preview';
+                        hoverVideo.style.cursor = 'pointer';
+                        hoverVideo.muted = true;
+                        hoverVideo.loop = true;
+                        hoverVideo.playbackRate = 2;
+                        hoverVideo.src = videoUrl;
+
+                        // Replace thumbnail with video
+                        thumbnail.style.display = 'none';
+                        container.appendChild(hoverVideo);
+
+                        // Play when ready
+                        hoverVideo.addEventListener('loadeddata', () => {
+                            hoverVideo.playbackRate = 2;
+                            hoverVideo.play().catch(err => {
+                                console.error('Video hover preview failed:', err);
+                            });
+                        });
+                    });
+
+                    card.addEventListener('mouseleave', () => {
+                        if (hoverVideo) {
+                            hoverVideo.pause();
+                            hoverVideo.src = '';
+                            hoverVideo.remove();
+                            hoverVideo = null;
+                            thumbnail.style.display = '';
+                        }
+                    });
+                });
             }
 
             groupByDate(media) {
@@ -579,9 +622,11 @@
                     thumbnailUrl = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22300%22 height=%22200%22%3E%3Crect fill=%22%23374151%22 width=%22300%22 height=%22200%22/%3E%3Ctext fill=%22%23fff%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2248%22%3E📹%3C/text%3E%3C/svg%3E';
                 }
 
+                const videoUrl = media.type === 'video' ? (media.proxyUrl || `/api/proxy?url=${encodeURIComponent(media.url)}`) : '';
+
                 return `
-                    <div class="media-card" data-name="${media.name}">
-                        <div class="${media.type === 'video' ? 'video-overlay' : ''}">
+                    <div class="media-card" data-name="${media.name}" data-type="${media.type}" data-video-url="${videoUrl}">
+                        <div class="${media.type === 'video' ? 'video-overlay' : ''}" data-preview-container>
                             <img src="${thumbnailUrl}" class="media-preview"
                                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22300%22 height=%22200%22%3E%3Crect fill=%22%23333%22 width=%22300%22 height=%22200%22/%3E%3Ctext fill=%22%23fff%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22%3E${media.type === 'video' ? '📹' : '📷'}%3C/text%3E%3C/svg%3E'"
                                  loading="lazy">
