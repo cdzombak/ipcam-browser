@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -188,16 +189,17 @@ func (c *MediaCache) GetWithFile(url string, suffix string, fetchFunc func(destP
 }
 
 type MediaItem struct {
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	URL       string `json:"url"`
-	ProxyURL  string `json:"proxyUrl"`
-	Date      string `json:"date"`
-	Type      string `json:"type"`
-	Trigger   string `json:"trigger"`
-	Timestamp string `json:"timestamp"`
-	Size      string `json:"size"`
-	Modified  string `json:"modified"`
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	URL          string `json:"url"`
+	ProxyURL     string `json:"proxyUrl"`
+	ThumbnailURL string `json:"thumbnailUrl,omitempty"`
+	Date         string `json:"date"`
+	Type         string `json:"type"`
+	Trigger      string `json:"trigger"`
+	Timestamp    string `json:"timestamp"`
+	Size         string `json:"size"`
+	Modified     string `json:"modified"`
 }
 
 type DirectoryEntry struct {
@@ -478,6 +480,98 @@ func preCacheVideos(media []MediaItem) {
 	}
 }
 
+// matchVideoThumbnails finds and assigns thumbnail images to videos
+// Prefers images taken during the video, falls back to 1 second before
+func matchVideoThumbnails(media []MediaItem) {
+	// Build index of images by timestamp
+	images := make(map[string]*MediaItem)
+	for i := range media {
+		if media[i].Type == "image" {
+			images[media[i].Timestamp] = &media[i]
+		}
+	}
+
+	// Match each video with the best thumbnail
+	for i := range media {
+		if media[i].Type != "video" {
+			continue
+		}
+
+		// Parse video timestamp range "2025-11-21 21:23:56 - 21:24:10"
+		parts := strings.Split(media[i].Timestamp, " - ")
+		if len(parts) != 2 {
+			continue
+		}
+
+		startTime := strings.TrimSpace(parts[0])
+		endTime := strings.TrimSpace(parts[1])
+
+		// Parse times to compare
+		startParsed, err := time.Parse("2006-01-02 15:04:05", startTime)
+		if err != nil {
+			continue
+		}
+
+		// For end time, we may need to prepend the date
+		var endParsed time.Time
+		if strings.Contains(endTime, "-") {
+			// Full timestamp
+			endParsed, err = time.Parse("2006-01-02 15:04:05", endTime)
+		} else {
+			// Time only, use same date as start
+			endParsed, err = time.Parse("2006-01-02 15:04:05", startTime[:11]+endTime)
+		}
+		if err != nil {
+			continue
+		}
+
+		var bestMatch *MediaItem
+		var duringVideo *MediaItem
+		var beforeVideo *MediaItem
+
+		// Look for matching images
+		for _, img := range images {
+			imgParsed, err := time.Parse("2006-01-02 15:04:05", img.Timestamp)
+			if err != nil {
+				continue
+			}
+
+			// Check if image is during video (preferred)
+			if (imgParsed.Equal(startParsed) || imgParsed.After(startParsed)) && imgParsed.Before(endParsed) {
+				if duringVideo == nil || imgParsed.Before(mustParseTime(duringVideo.Timestamp)) {
+					duringVideo = img
+				}
+			}
+
+			// Check if image is 1 second before video start (fallback)
+			if imgParsed.Equal(startParsed.Add(-1 * time.Second)) {
+				beforeVideo = img
+			}
+		}
+
+		// Prefer during video, fallback to before video
+		if duringVideo != nil {
+			bestMatch = duringVideo
+		} else if beforeVideo != nil {
+			bestMatch = beforeVideo
+		}
+
+		// Set thumbnail URL if we found a match
+		if bestMatch != nil {
+			media[i].ThumbnailURL = "/api/proxy?url=" + url.QueryEscape(bestMatch.URL)
+		}
+	}
+}
+
+// mustParseTime parses a time or panics (for use in comparisons where we know format is valid)
+func mustParseTime(s string) time.Time {
+	t, err := time.Parse("2006-01-02 15:04:05", s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 func fetchDateMedia(datePath string) ([]MediaItem, error) {
 	var media []MediaItem
 
@@ -519,6 +613,9 @@ func fetchDateMedia(datePath string) ([]MediaItem, error) {
 			}
 		}
 	}
+
+	// Match videos with their thumbnail images
+	matchVideoThumbnails(media)
 
 	return media, nil
 }

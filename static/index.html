@@ -214,12 +214,16 @@
             max-width: 90vw;
             max-height: 90vh;
             position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
         }
 
         .modal img,
         .modal video {
             max-width: 100%;
-            max-height: 90vh;
+            max-height: 70vh;
             display: block;
         }
 
@@ -236,11 +240,39 @@
         }
 
         .modal-info {
-            position: absolute;
-            bottom: -60px;
-            left: 0;
             color: white;
             font-size: 0.875rem;
+            text-align: center;
+        }
+
+        #modalMedia {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .modal-video-actions {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+            width: 100%;
+        }
+
+        .modal-video-actions .action-btn {
+            padding: 0.5rem 1rem;
+            background: #f39c12;
+            color: #1b1b1b;
+            text-decoration: none;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .modal-video-actions .action-btn.secondary {
+            background: #3498db;
+            color: white;
         }
 
         .error {
@@ -320,6 +352,7 @@
             constructor() {
                 this.allMedia = [];
                 this.filteredMedia = [];
+                this.currentIndex = -1;
 
                 this.initEventListeners();
             }
@@ -336,6 +369,8 @@
                         this.closeModal();
                     }
                 });
+
+                window.addEventListener('keydown', (e) => this.handleKeydown(e));
             }
 
             async loadMedia() {
@@ -440,8 +475,10 @@
                 content.querySelectorAll('.media-card').forEach(card => {
                     card.addEventListener('click', () => {
                         const name = card.dataset.name;
-                        const media = this.filteredMedia.find(m => m.name === name);
-                        this.openModal(media);
+                        const index = this.filteredMedia.findIndex(m => m.name === name);
+                        if (index !== -1) {
+                            this.openModalByIndex(index);
+                        }
                     });
                 });
             }
@@ -460,10 +497,19 @@
                 const triggerClass = media.trigger === 'alarm' ? 'alarm' : 'periodic';
                 const triggerLabel = media.trigger === 'alarm' ? 'Alarm/Motion' : 'Periodic';
 
-                // Use actual images for images, placeholder for videos
-                const thumbnailUrl = media.type === 'image'
-                    ? `/api/proxy?url=${encodeURIComponent(media.url)}`
-                    : 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22300%22 height=%22200%22%3E%3Crect fill=%22%23374151%22 width=%22300%22 height=%22200%22/%3E%3Ctext fill=%22%23fff%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2248%22%3E📹%3C/text%3E%3C/svg%3E';
+                // Use thumbnailUrl if available (matched video thumbnails),
+                // or actual image for images, or placeholder for videos without thumbnails
+                let thumbnailUrl;
+                if (media.thumbnailUrl) {
+                    // Use matched thumbnail for videos
+                    thumbnailUrl = media.thumbnailUrl;
+                } else if (media.type === 'image') {
+                    // Use actual image
+                    thumbnailUrl = `/api/proxy?url=${encodeURIComponent(media.url)}`;
+                } else {
+                    // Placeholder for videos without matched thumbnails
+                    thumbnailUrl = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22300%22 height=%22200%22%3E%3Crect fill=%22%23374151%22 width=%22300%22 height=%22200%22/%3E%3Ctext fill=%22%23fff%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2248%22%3E📹%3C/text%3E%3C/svg%3E';
+                }
 
                 return `
                     <div class="media-card" data-name="${media.name}">
@@ -481,24 +527,60 @@
                 `;
             }
 
-            openModal(media) {
+            openModalByIndex(index) {
+                const media = this.filteredMedia[index];
+                if (!media) return;
+                this.currentIndex = index;
+
                 const modal = document.getElementById('modal');
                 const modalMedia = document.getElementById('modalMedia');
                 const modalInfo = document.getElementById('modalInfo');
 
                 if (media.type === 'image') {
                     const mediaUrl = `/api/proxy?url=${encodeURIComponent(media.url)}`;
-                    modalMedia.innerHTML = `<img src="${mediaUrl}" alt="${media.name}">`;
+                    modalMedia.innerHTML = `
+                        <img src="${mediaUrl}" alt="${media.name}">
+                        <div class="modal-video-actions">
+                            <a class="action-btn" href="${mediaUrl}" download="${media.name || 'image'}">Download image</a>
+                        </div>
+                    `;
                 } else {
                     // Use proxyUrl for videos (remuxed to MP4)
                     const videoUrl = media.proxyUrl || `/api/proxy?url=${encodeURIComponent(media.url)}`;
                     modalMedia.innerHTML = `
-                        <video controls autoplay style="max-width: 100%; max-height: 90vh;">
+                        <video id="modalVideo" controls autoplay style="max-width: 100%; max-height: 70vh;">
                             <source src="${videoUrl}" type="video/mp4">
                             Your browser doesn't support video playback.
                             <a href="${videoUrl}" download>Download video</a>
                         </video>
+                        <div class="modal-video-actions">
+                            <button id="playbackToggle" class="action-btn secondary" type="button">Fast playback: On (3×)</button>
+                            <a id="downloadVideo" class="action-btn" href="${videoUrl}" download>Download video</a>
+                        </div>
                     `;
+
+                    const videoElement = document.getElementById('modalVideo');
+                    const playbackToggle = document.getElementById('playbackToggle');
+
+                    let fastPlaybackEnabled = true;
+                    const applyPlaybackRate = () => {
+                        videoElement.playbackRate = fastPlaybackEnabled ? 3 : 1;
+                    };
+                    const updateToggleLabel = () => {
+                        playbackToggle.textContent = fastPlaybackEnabled
+                            ? 'Fast playback: On (3×)'
+                            : 'Fast playback: Off (1×)';
+                    };
+
+                    videoElement.addEventListener('loadedmetadata', applyPlaybackRate);
+                    applyPlaybackRate();
+
+                    playbackToggle.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        fastPlaybackEnabled = !fastPlaybackEnabled;
+                        applyPlaybackRate();
+                        updateToggleLabel();
+                    });
                 }
 
                 modalInfo.innerHTML = `
@@ -518,6 +600,40 @@
                 if (video) {
                     video.pause();
                     video.src = '';
+                }
+
+                this.currentIndex = -1;
+            }
+
+            showPrev() {
+                if (this.currentIndex <= 0) return;
+                this.openModalByIndex(this.currentIndex - 1);
+            }
+
+            showNext() {
+                if (this.currentIndex < 0 || this.currentIndex >= this.filteredMedia.length - 1) return;
+                this.openModalByIndex(this.currentIndex + 1);
+            }
+
+            handleKeydown(event) {
+                const modal = document.getElementById('modal');
+                if (!modal.classList.contains('active')) return;
+
+                switch (event.key) {
+                    case 'ArrowLeft':
+                        event.preventDefault();
+                        this.showPrev();
+                        break;
+                    case 'ArrowRight':
+                        event.preventDefault();
+                        this.showNext();
+                        break;
+                    case 'Escape':
+                        event.preventDefault();
+                        this.closeModal();
+                        break;
+                    default:
+                        break;
                 }
             }
         }
