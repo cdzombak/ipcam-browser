@@ -2,6 +2,8 @@
 
 An improved web application for browsing and viewing recordings and snapshots on an SD-card equipped SV3C/CamHiPro compatible IP webcam.
 
+![screenshot](ipcam.png)
+
 ## Features
 
 - 📹 Browse videos and images from your IP camera's SD card
