@@ -223,10 +223,10 @@ func main() {
 
 	// Load config from environment
 	config = Config{
-		CameraURL:               getEnv("CAMERA_URL", "http://192.168.205.196/web/sd"),
+		CameraURL:               getEnv("CAMERA_URL", ""),
 		CameraName:              getEnv("CAMERA_NAME", "camera"),
 		Username:                getEnv("CAMERA_USERNAME", "admin"),
-		Password:                getEnv("CAMERA_PASSWORD", "birdbath2"),
+		Password:                getEnv("CAMERA_PASSWORD", ""),
 		CacheDir:                getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "ipcam-browser-cache")),
 		MaxConcurrentConversions: getEnvInt("MAX_CONCURRENT_CONVERSIONS", 3),
 	}
