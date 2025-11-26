@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/base64"
@@ -15,10 +16,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/html"
@@ -30,12 +33,14 @@ var version = "<dev>"
 var staticFiles embed.FS
 
 type Config struct {
-	CameraURL               string
-	CameraName              string
-	Username                string
-	Password                string
-	CacheDir                string
+	CameraURL                string
+	CameraName               string
+	Username                 string
+	Password                 string
+	CacheDir                 string
 	MaxConcurrentConversions int
+	BackgroundCacheEnabled   bool
+	BackgroundCacheInterval  time.Duration
 }
 
 // MediaCache handles thread-safe caching of media files
@@ -185,6 +190,195 @@ func (c *MediaCache) GetWithFile(url string, suffix string, fetchFunc func(destP
 	return cachePath, nil
 }
 
+// BackgroundCacher handles periodic media caching in the background
+type BackgroundCacher struct {
+	interval time.Duration
+	cache    *MediaCache
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	running  sync.Mutex // Prevents concurrent cache runs
+}
+
+// NewBackgroundCacher creates a new background cacher
+func NewBackgroundCacher(interval time.Duration, cache *MediaCache) *BackgroundCacher {
+	return &BackgroundCacher{
+		interval: interval,
+		cache:    cache,
+		stopCh:   make(chan struct{}),
+		doneCh:   make(chan struct{}),
+	}
+}
+
+// Start begins the background caching loop
+func (b *BackgroundCacher) Start() {
+	log.Printf("Starting background cacher with interval %v", b.interval)
+
+	// Run immediately on startup
+	b.runCacheJob()
+
+	go func() {
+		defer close(b.doneCh)
+		ticker := time.NewTicker(b.interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				b.runCacheJob()
+			case <-b.stopCh:
+				log.Println("Background cacher received stop signal")
+				return
+			}
+		}
+	}()
+}
+
+// Stop gracefully stops the background cacher and waits for any in-progress
+// cache run to complete
+func (b *BackgroundCacher) Stop() {
+	close(b.stopCh)
+	// Wait for the goroutine to exit
+	<-b.doneCh
+	// Wait for any in-progress cache run to complete
+	b.running.Lock()
+	b.running.Unlock()
+	log.Println("Background cacher stopped")
+}
+
+// runCacheJob executes a single cache run
+// Uses mutex to ensure only one cache run happens at a time - if a previous
+// run is still in progress when the ticker fires, we skip this run
+func (b *BackgroundCacher) runCacheJob() {
+	// Try to acquire the lock - if we can't, a previous run is still in progress
+	if !b.running.TryLock() {
+		log.Println("Background cache: skipping run, previous run still in progress")
+		return
+	}
+	defer b.running.Unlock()
+
+	log.Println("Background cache: starting media fetch and cache run")
+	startTime := time.Now()
+
+	// Fetch all media - this also triggers async video pre-caching via preCacheVideos,
+	// but we'll wait for completion below using preCacheVideosSync
+	media, err := fetchAllMedia()
+	if err != nil {
+		log.Printf("Background cache: failed to fetch media: %v", err)
+		return
+	}
+
+	log.Printf("Background cache: fetched %d media items", len(media))
+
+	// Count videos and images
+	videoCount := 0
+	imageCount := 0
+	for _, item := range media {
+		if item.Type == "video" {
+			videoCount++
+		} else if item.Type == "image" {
+			imageCount++
+		}
+	}
+	log.Printf("Background cache: caching %d videos and %d images", videoCount, imageCount)
+
+	// Pre-cache videos and images concurrently
+	// Note: fetchAllMedia already spawned async preCacheVideos, but the MediaCache's
+	// per-file locking ensures no duplicate work - whichever goroutine gets there
+	// first does the work, others return immediately from the cache check
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		preCacheVideosSync(media)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b.preCacheImages(media)
+	}()
+
+	wg.Wait()
+
+	log.Printf("Background cache: completed in %v", time.Since(startTime))
+}
+
+// preCacheImages downloads and caches images, prioritizing video thumbnails
+func (b *BackgroundCacher) preCacheImages(media []MediaItem) {
+	// Create a semaphore to limit concurrent image fetches
+	// Use same limit as video conversions to avoid overwhelming the camera
+	sem := make(chan struct{}, config.MaxConcurrentConversions)
+
+	var wg sync.WaitGroup
+
+	// First, cache video thumbnails (higher priority)
+	for _, item := range media {
+		if item.Type == "video" && item.ThumbnailURL != "" {
+			// Extract the actual image URL from the proxy URL
+			// ThumbnailURL format: /api/proxy?url=<encoded-url>
+			thumbnailURL := item.ThumbnailURL
+			if !strings.HasPrefix(thumbnailURL, "/api/proxy?url=") {
+				continue
+			}
+
+			encodedURL := strings.TrimPrefix(thumbnailURL, "/api/proxy?url=")
+			imageURL, err := url.QueryUnescape(encodedURL)
+			if err != nil {
+				log.Printf("Background cache: failed to decode thumbnail URL: %v", err)
+				continue
+			}
+
+			wg.Add(1)
+			sem <- struct{}{} // Acquire semaphore
+
+			go func(imgURL string) {
+				defer wg.Done()
+				defer func() { <-sem }() // Release semaphore
+
+				ext := filepath.Ext(imgURL)
+				if ext == "" {
+					ext = ".jpg"
+				}
+
+				_, err := b.cache.Get(imgURL, ext, func() ([]byte, error) {
+					return fetchFromCamera(imgURL)
+				})
+				if err != nil {
+					log.Printf("Background cache: failed to cache thumbnail %s: %v", imgURL, err)
+				}
+			}(imageURL)
+		}
+	}
+
+	// Then cache regular images
+	for _, item := range media {
+		if item.Type == "image" {
+			wg.Add(1)
+			sem <- struct{}{} // Acquire semaphore
+
+			go func(imgURL string) {
+				defer wg.Done()
+				defer func() { <-sem }() // Release semaphore
+
+				ext := filepath.Ext(imgURL)
+				if ext == "" {
+					ext = ".jpg"
+				}
+
+				_, err := b.cache.Get(imgURL, ext, func() ([]byte, error) {
+					return fetchFromCamera(imgURL)
+				})
+				if err != nil {
+					log.Printf("Background cache: failed to cache image %s: %v", imgURL, err)
+				}
+			}(item.URL)
+		}
+	}
+
+	wg.Wait()
+}
+
 type MediaItem struct {
 	Name             string `json:"name"`
 	Path             string `json:"path"`
@@ -223,12 +417,14 @@ func main() {
 
 	// Load config from environment
 	config = Config{
-		CameraURL:               getEnv("CAMERA_URL", ""),
-		CameraName:              getEnv("CAMERA_NAME", "camera"),
-		Username:                getEnv("CAMERA_USERNAME", "admin"),
-		Password:                getEnv("CAMERA_PASSWORD", ""),
-		CacheDir:                getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "ipcam-browser-cache")),
+		CameraURL:                getEnv("CAMERA_URL", ""),
+		CameraName:               getEnv("CAMERA_NAME", "camera"),
+		Username:                 getEnv("CAMERA_USERNAME", "admin"),
+		Password:                 getEnv("CAMERA_PASSWORD", ""),
+		CacheDir:                 getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "ipcam-browser-cache")),
 		MaxConcurrentConversions: getEnvInt("MAX_CONCURRENT_CONVERSIONS", 3),
+		BackgroundCacheEnabled:   getEnvBool("BACKGROUND_CACHE_ENABLED", false),
+		BackgroundCacheInterval:  time.Duration(getEnvInt("BACKGROUND_CACHE_INTERVAL_MINUTES", 5)) * time.Minute,
 	}
 
 	// Initialize cache
@@ -251,10 +447,50 @@ func main() {
 	}
 	http.Handle("/", http.FileServer(http.FS(staticFS)))
 
+	// Start background cacher if enabled
+	var backgroundCacher *BackgroundCacher
+	if config.BackgroundCacheEnabled {
+		backgroundCacher = NewBackgroundCacher(config.BackgroundCacheInterval, mediaCache)
+		backgroundCacher.Start()
+	}
+
+	// Setup HTTP server
 	port := getEnv("PORT", "8080")
+	server := &http.Server{
+		Addr: ":" + port,
+	}
+
+	// Handle graceful shutdown
+	shutdownCh := make(chan os.Signal, 1)
+	signal.Notify(shutdownCh, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-shutdownCh
+		log.Println("Shutdown signal received, stopping gracefully...")
+
+		// Stop background cacher first
+		if backgroundCacher != nil {
+			backgroundCacher.Stop()
+		}
+
+		// Shutdown HTTP server with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("HTTP server shutdown error: %v", err)
+		}
+	}()
+
 	log.Printf("Starting server on http://localhost:%s", port)
 	log.Printf("Camera URL: %s", config.CameraURL)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	if config.BackgroundCacheEnabled {
+		log.Printf("Background caching enabled with interval %v", config.BackgroundCacheInterval)
+	}
+
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatalf("HTTP server error: %v", err)
+	}
+	log.Println("Server stopped")
 }
 
 func handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -573,7 +809,7 @@ func fetchAllMedia() ([]MediaItem, error) {
 	return allMedia, nil
 }
 
-// preCacheVideos pre-converts videos to MP4 in the background
+// preCacheVideos pre-converts videos to MP4 in the background (fire-and-forget)
 func preCacheVideos(media []MediaItem) {
 	// Create a semaphore to limit concurrent video conversions
 	sem := make(chan struct{}, config.MaxConcurrentConversions)
@@ -596,6 +832,36 @@ func preCacheVideos(media []MediaItem) {
 			}
 		}(item.URL)
 	}
+}
+
+// preCacheVideosSync pre-converts videos to MP4 and waits for all to complete
+func preCacheVideosSync(media []MediaItem) {
+	// Create a semaphore to limit concurrent video conversions
+	sem := make(chan struct{}, config.MaxConcurrentConversions)
+	var wg sync.WaitGroup
+
+	for _, item := range media {
+		if item.Type != "video" {
+			continue
+		}
+
+		wg.Add(1)
+		sem <- struct{}{} // Acquire
+		go func(videoURL string) {
+			defer wg.Done()
+			defer func() { <-sem }() // Release
+
+			// Try to get/create cached MP4 - this will trigger conversion if not cached
+			_, err := mediaCache.GetWithFile(videoURL, ".mp4", func(destPath string) error {
+				return convertVideoToMP4(videoURL, destPath)
+			})
+			if err != nil {
+				log.Printf("Pre-cache failed for %s: %v", videoURL, err)
+			}
+		}(item.URL)
+	}
+
+	wg.Wait()
 }
 
 // matchVideoThumbnails finds and assigns thumbnail images to videos
@@ -980,4 +1246,12 @@ func getEnvInt(key string, defaultValue int) int {
 	intValue := defaultValue
 	_, _ = fmt.Sscanf(value, "%d", &intValue)
 	return intValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value == "true" || value == "1" || value == "yes"
 }
