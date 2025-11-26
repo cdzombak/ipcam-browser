@@ -427,6 +427,16 @@ func main() {
 		BackgroundCacheInterval:  time.Duration(getEnvInt("BACKGROUND_CACHE_INTERVAL_MINUTES", 5)) * time.Minute,
 	}
 
+	// Validate config to prevent panics/deadlocks
+	if config.MaxConcurrentConversions < 1 {
+		log.Printf("Warning: MAX_CONCURRENT_CONVERSIONS must be >= 1, using 1")
+		config.MaxConcurrentConversions = 1
+	}
+	if config.BackgroundCacheInterval < 1*time.Minute {
+		log.Printf("Warning: BACKGROUND_CACHE_INTERVAL_MINUTES must be >= 1, using 1")
+		config.BackgroundCacheInterval = 1 * time.Minute
+	}
+
 	// Initialize cache
 	var err error
 	mediaCache, err = NewMediaCache(config.CacheDir)
