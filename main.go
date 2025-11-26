@@ -330,10 +330,9 @@ func (b *BackgroundCacher) preCacheImages(media []MediaItem) {
 			}
 
 			wg.Add(1)
-			sem <- struct{}{} // Acquire semaphore
-
 			go func(imgURL string) {
 				defer wg.Done()
+				sem <- struct{}{} // Acquire semaphore
 				defer func() { <-sem }() // Release semaphore
 
 				ext := filepath.Ext(imgURL)
@@ -355,10 +354,9 @@ func (b *BackgroundCacher) preCacheImages(media []MediaItem) {
 	for _, item := range media {
 		if item.Type == "image" {
 			wg.Add(1)
-			sem <- struct{}{} // Acquire semaphore
-
 			go func(imgURL string) {
 				defer wg.Done()
+				sem <- struct{}{} // Acquire semaphore
 				defer func() { <-sem }() // Release semaphore
 
 				ext := filepath.Ext(imgURL)
@@ -856,9 +854,9 @@ func preCacheVideosSync(media []MediaItem) {
 		}
 
 		wg.Add(1)
-		sem <- struct{}{} // Acquire
 		go func(videoURL string) {
 			defer wg.Done()
+			sem <- struct{}{} // Acquire
 			defer func() { <-sem }() // Release
 
 			// Try to get/create cached MP4 - this will trigger conversion if not cached
