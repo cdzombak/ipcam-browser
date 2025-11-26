@@ -213,11 +213,12 @@ func NewBackgroundCacher(interval time.Duration, cache *MediaCache) *BackgroundC
 func (b *BackgroundCacher) Start() {
 	log.Printf("Starting background cacher with interval %v", b.interval)
 
-	// Run immediately on startup
-	b.runCacheJob()
-
 	go func() {
 		defer close(b.doneCh)
+
+		// Run immediately on startup (but asynchronously so server can start)
+		b.runCacheJob()
+
 		ticker := time.NewTicker(b.interval)
 		defer ticker.Stop()
 
