@@ -30,6 +30,10 @@ services:
       MAX_CONCURRENT_CONVERSIONS: "3"              # Max parallel video conversions (default: 3)
                                                     # Increase for faster processing, decrease to reduce CPU load
 
+      # Background caching (optional) - pre-caches media for faster page loads
+      # BACKGROUND_CACHE_ENABLED: "true"           # Enable background caching (default: false)
+      # BACKGROUND_CACHE_INTERVAL_MINUTES: "5"     # Minutes between cache runs (default: 5)
+
     volumes:
       # Persist cache across container restarts
       - ipcam-cache:/var/cache/ipcam-browser
