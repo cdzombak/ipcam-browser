@@ -12,6 +12,7 @@ An improved web application for browsing and viewing recordings and snapshots on
 - 🎬 Built-in video player for H.264 (.264) and H.265 (.265) files
 - 🔄 On-the-fly video remuxing (raw H.264/H.265 → MP4) with aggressive error handling
 - 💾 Caching system for images and converted videos
+- ⏱️ Optional background caching for improved UX
 - 📦 Single self-contained binary
 - 📱 Responsive design
 
@@ -108,6 +109,28 @@ Configuration is via environment variables:
 - `PORT` - Server port (default: `8080`)
 - `CACHE_DIR` - Directory for caching media files (default: `/tmp/ipcam-browser-cache`)
 - `MAX_CONCURRENT_CONVERSIONS` - Maximum parallel video conversions (default: `3`)
+- `BACKGROUND_CACHE_ENABLED` - Enable background media caching (default: `false`)
+- `BACKGROUND_CACHE_INTERVAL_MINUTES` - Interval between background cache runs in minutes (default: `5`)
+
+## Background Caching
+
+When enabled via `BACKGROUND_CACHE_ENABLED=true`, the application periodically fetches the media list from the camera and pre-caches both videos and images. This improves the user experience when loading the web interface after not using it for a while, as content will already be cached and ready to view.
+
+**How it works:**
+- On startup, immediately fetches and caches all media
+- Then repeats at the configured interval (default: every 5 minutes)
+- Videos are remuxed to MP4 format for instant browser playback
+- Video thumbnails are cached first (higher priority), followed by all other images
+- Uses the same concurrency limits as on-demand requests to avoid overwhelming the camera
+- Gracefully stops when the application receives a shutdown signal
+
+**Example configuration:**
+```bash
+export BACKGROUND_CACHE_ENABLED=true
+export BACKGROUND_CACHE_INTERVAL_MINUTES=10  # Cache every 10 minutes
+```
+
+**Note:** Background caching is disabled by default. The on-demand caching path continues to work regardless of this setting.
 
 ## Cache Maintenance
 
