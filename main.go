@@ -237,11 +237,9 @@ func (b *BackgroundCacher) Start() {
 // cache run to complete
 func (b *BackgroundCacher) Stop() {
 	close(b.stopCh)
-	// Wait for the goroutine to exit
+	// Wait for the goroutine to exit - this also waits for any in-progress
+	// runCacheJob to complete since the goroutine blocks on runCacheJob calls
 	<-b.doneCh
-	// Wait for any in-progress cache run to complete
-	b.running.Lock()
-	b.running.Unlock()
 	log.Println("Background cacher stopped")
 }
 
@@ -273,9 +271,10 @@ func (b *BackgroundCacher) runCacheJob() {
 	videoCount := 0
 	imageCount := 0
 	for _, item := range media {
-		if item.Type == "video" {
+		switch item.Type {
+		case "video":
 			videoCount++
-		} else if item.Type == "image" {
+		case "image":
 			imageCount++
 		}
 	}
