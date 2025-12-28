@@ -528,6 +528,10 @@ func handleGetMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prevent browser caching so that the media list is always fresh from the camera
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(media); err != nil {
 		log.Printf("Error encoding media response: %v", err)
