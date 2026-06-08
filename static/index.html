@@ -86,11 +86,16 @@
             font-weight: 500;
         }
 
-        select {
+        select,
+        input[type="time"] {
             padding: 0.5rem;
             border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 0.875rem;
+        }
+
+        input[type="time"] {
+            width: 7.5rem;
         }
 
         .stats {
@@ -330,6 +335,14 @@
             </select>
         </div>
         <div class="filter-group">
+            <label for="startTimeFilter">From:</label>
+            <input type="time" id="startTimeFilter">
+        </div>
+        <div class="filter-group">
+            <label for="endTimeFilter">To:</label>
+            <input type="time" id="endTimeFilter">
+        </div>
+        <div class="filter-group">
             <label for="typeFilter">Type:</label>
             <select id="typeFilter">
                 <option value="">All Types</option>
@@ -400,6 +413,8 @@
                 document.getElementById('loadBtn').addEventListener('click', () => this.loadMedia());
 
                 document.getElementById('dateFilter').addEventListener('change', () => this.applyFilters());
+                document.getElementById('startTimeFilter').addEventListener('change', () => this.applyFilters());
+                document.getElementById('endTimeFilter').addEventListener('change', () => this.applyFilters());
                 document.getElementById('typeFilter').addEventListener('change', () => this.applyFilters());
                 document.getElementById('triggerFilter').addEventListener('change', () => this.applyFilters());
                 document.getElementById('sortOrder').addEventListener('change', (e) => {
@@ -477,11 +492,14 @@
 
             applyFilters() {
                 const dateFilter = document.getElementById('dateFilter').value;
+                const startTimeFilter = this.parseTimeFilter(document.getElementById('startTimeFilter').value, false);
+                const endTimeFilter = this.parseTimeFilter(document.getElementById('endTimeFilter').value, true);
                 const typeFilter = document.getElementById('typeFilter').value;
                 const triggerFilter = document.getElementById('triggerFilter').value;
 
                 this.filteredMedia = this.allMedia.filter(media => {
                     if (dateFilter && media.date !== dateFilter) return false;
+                    if (!this.matchesTimeFilter(media, startTimeFilter, endTimeFilter)) return false;
                     if (typeFilter && media.type !== typeFilter) return false;
                     if (triggerFilter && media.trigger !== triggerFilter) return false;
                     return true;
@@ -492,6 +510,41 @@
 
                 this.updateStats();
                 this.render();
+            }
+
+            parseTimeFilter(value, isEndTime) {
+                if (!value) return null;
+
+                const parts = value.split(':').map(part => Number.parseInt(part, 10));
+                if (parts.length < 2 || parts.some(part => Number.isNaN(part))) return null;
+
+                const [hours, minutes, seconds = isEndTime ? 59 : 0] = parts;
+                return (hours * 3600) + (minutes * 60) + seconds;
+            }
+
+            getMediaStartSeconds(media) {
+                if (!media.timestamp) return null;
+
+                const startTimestamp = media.timestamp.split(' - ')[0];
+                const timePart = startTimestamp.split(' ')[1];
+                if (!timePart) return null;
+
+                return this.parseTimeFilter(timePart, false);
+            }
+
+            matchesTimeFilter(media, startTimeFilter, endTimeFilter) {
+                if (startTimeFilter === null && endTimeFilter === null) return true;
+
+                const mediaStart = this.getMediaStartSeconds(media);
+                if (mediaStart === null) return false;
+
+                if (startTimeFilter !== null && endTimeFilter !== null && startTimeFilter > endTimeFilter) {
+                    return mediaStart >= startTimeFilter || mediaStart <= endTimeFilter;
+                }
+
+                if (startTimeFilter !== null && mediaStart < startTimeFilter) return false;
+                if (endTimeFilter !== null && mediaStart > endTimeFilter) return false;
+                return true;
             }
 
             sortFilteredMedia() {
