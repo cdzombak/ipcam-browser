@@ -105,7 +105,7 @@ GET /api/media HTTP/1.1
 | `path` | string | Yes | Full path to file on camera (e.g., "2025-11-21/images000/A251121212356.jpg") |
 | `url` | string | Yes | Direct URL to file on camera |
 | `proxyUrl` | string | Yes | Proxied/converted URL for videos (empty for images). Format: `/api/video/{encoded-path}.mp4` |
-| `thumbnailUrl` | string | No | Thumbnail image URL for videos (omitted if no matching thumbnail). Format: `/api/proxy?url={encoded-url}` |
+| `thumbnailUrl` | string | No | Thumbnail image URL for videos (omitted for images). Set to `/api/proxy?url={encoded-url}` when a camera image was recorded during the video, otherwise `/api/thumbnail/{encoded-path}.jpg` for a frame generated from the video itself |
 | `downloadFilename` | string | Yes | Suggested filename for downloads in format: `{cameraName}_YYYY-MM-DD_HH-mm-ss.ext` |
 | `date` | string | Yes | Date directory name (e.g., "2025-11-21") |
 | `type` | string | Yes | Media type: `"image"` or `"video"` |
@@ -249,6 +249,56 @@ GET /api/video/{encoded-path}.mp4 HTTP/1.1
 
 curl "http://localhost:8080/api/video/2025-11-21%2Frecord000%2FA251121_212356_212410.264.mp4" \
   --output video.mp4
+```
+
+---
+
+### GET /api/thumbnail/{encoded-path}.jpg
+
+Generates, caches, and serves a thumbnail image for a video, extracted from the frame 6 seconds
+into the video. Videos shorter than 6 seconds use their midpoint frame instead.
+
+The video is converted to MP4 first if it is not already cached, so an uncached request may take
+as long as a `/api/video/` request. Thumbnails are cached alongside the converted videos in
+`CACHE_DIR` and are scaled to 480 pixels wide.
+
+#### Request
+
+```http
+GET /api/thumbnail/{encoded-path}.jpg HTTP/1.1
+```
+
+#### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `encoded-path` | string | Yes | URL-encoded path to video file on camera (without leading slash). Original extension (`.264` or `.265`) should be included in the path before encoding |
+
+#### Response
+
+**Status:** `200 OK`
+
+**Content-Type:** `image/jpeg`
+
+**Cache-Control:** `public, max-age=31536000, immutable`
+
+**Body:** JPEG image
+
+#### Error Responses
+
+| Status | Description |
+|--------|-------------|
+| `400 Bad Request` | Invalid path or URL does not match configured camera |
+| `500 Internal Server Error` | Video conversion failed, thumbnail generation failed, or cache error |
+
+#### Example
+
+```bash
+# Path: 2025-11-21/record000/A251121_212356_212410.264
+# Encoded: 2025-11-21%2Frecord000%2FA251121_212356_212410.264
+
+curl "http://localhost:8080/api/thumbnail/2025-11-21%2Frecord000%2FA251121_212356_212410.264.jpg" \
+  --output thumbnail.jpg
 ```
 
 ---

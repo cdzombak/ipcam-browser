@@ -29,6 +29,19 @@ import (
 
 var version = "<dev>"
 
+const (
+	// thumbnailSuffix is the cache-key suffix for generated video thumbnails.
+	// It must differ from the ".mp4" suffix so a video's thumbnail and its
+	// converted video get distinct cache entries (and distinct file locks).
+	thumbnailSuffix = ".thumb.jpg"
+
+	// thumbnailSeekSeconds is how far into a video to grab the thumbnail frame.
+	thumbnailSeekSeconds = 6.0
+
+	// thumbnailWidth is the width, in pixels, of generated thumbnails.
+	thumbnailWidth = 480
+)
+
 //go:embed static
 var staticFiles embed.FS
 
@@ -447,6 +460,7 @@ func main() {
 	http.HandleFunc("/api/media", handleGetMedia)
 	http.HandleFunc("/api/proxy", handleProxy)
 	http.HandleFunc("/api/video/", handleVideoProxy)
+	http.HandleFunc("/api/thumbnail/", handleThumbnail)
 
 	// Serve embedded static files
 	staticFS, err := fs.Sub(staticFiles, "static")
@@ -641,6 +655,46 @@ func handleVideoProxy(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, cachedPath)
 }
 
+func handleThumbnail(w http.ResponseWriter, r *http.Request) {
+	// Extract the video path from the URL
+	// URL format: /api/thumbnail/{encoded-path}.jpg
+	path := strings.TrimPrefix(r.URL.Path, "/api/thumbnail/")
+	path = strings.TrimSuffix(path, ".jpg")
+
+	// Decode the path
+	decodedPath, err := url.QueryUnescape(path)
+	if err != nil {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	// Build the camera URL
+	targetURL := config.CameraURL + "/" + decodedPath
+
+	// Ensure URL is for our camera
+	if !strings.HasPrefix(targetURL, config.CameraURL) {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+
+	// Try to get the thumbnail from cache, or generate it if not cached
+	cachedPath, err := mediaCache.GetWithFile(targetURL, thumbnailSuffix, func(destPath string) error {
+		return generateThumbnail(targetURL, destPath)
+	})
+
+	if err != nil {
+		log.Printf("Thumbnail generation error for %s: %v", targetURL, err)
+		http.Error(w, "Failed to generate thumbnail", http.StatusInternalServerError)
+		return
+	}
+
+	// A given video's thumbnail never changes, and the grid requests thousands of these
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+
+	// Serve the cached thumbnail
+	http.ServeFile(w, r, cachedPath)
+}
+
 // stripHXVSHeaders removes HXVS/HXVF 16-byte headers from raw H.264/H.265 stream
 // These proprietary headers prevent the video from playing in most video players
 func stripHXVSHeaders(data []byte) []byte {
@@ -791,6 +845,76 @@ func convertVideoToMP4(sourceURL string, destPath string) error {
 	return nil
 }
 
+// probeDuration returns a video's duration in seconds using ffprobe,
+// or 0 if the duration cannot be determined.
+func probeDuration(path string) float64 {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=nk=1:nw=1",
+		path,
+	)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	return parseFloat(strings.TrimSpace(string(output)))
+}
+
+// generateThumbnail extracts a single frame from a video and writes it to destPath as a JPEG.
+// The video is converted to MP4 first (reusing the cached copy if one exists), because seeking
+// into the raw camera stream is unreliable.
+func generateThumbnail(sourceURL string, destPath string) error {
+	// Ensure the converted MP4 exists. This takes the ".mp4" file lock, never the
+	// ".thumb.jpg" lock our caller holds, so it cannot deadlock.
+	videoPath, err := mediaCache.GetWithFile(sourceURL, ".mp4", func(mp4Path string) error {
+		return convertVideoToMP4(sourceURL, mp4Path)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get video: %w", err)
+	}
+
+	// Seeking past the last frame produces no thumbnail, so on a short video
+	// grab the midpoint instead.
+	seek := thumbnailSeekSeconds
+	if duration := probeDuration(videoPath); duration > 0 && duration <= thumbnailSeekSeconds {
+		seek = duration / 2
+	}
+
+	// -ss before -i seeks to the nearest preceding keyframe without decoding
+	// everything up to that point.
+	cmd := exec.Command("ffmpeg",
+		"-y",                              // Overwrite output file without asking
+		"-ss", fmt.Sprintf("%.3f", seek),  // Seek to the thumbnail frame
+		"-i", videoPath,                   // Input file
+		"-frames:v", "1",                  // Capture a single frame
+		"-update", "1",                    // Write that frame to a single output file
+		"-vf", fmt.Sprintf("scale=%d:-2", thumbnailWidth), // Scale, preserving aspect ratio
+		"-q:v", "4", // JPEG quality (2 = best, 31 = worst)
+		"-f", "image2",
+		destPath, // Output file
+	)
+
+	errOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffmpeg thumbnail failed: %v, output: %s", err, string(errOutput))
+	}
+
+	// Defense in depth: should ffmpeg ever exit 0 without writing a frame, the caller
+	// would rename an empty file into the cache and serve a broken thumbnail forever.
+	info, err := os.Stat(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to stat thumbnail: %w", err)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("ffmpeg produced an empty thumbnail for %s", sourceURL)
+	}
+
+	return nil
+}
+
 func fetchAllMedia() ([]MediaItem, error) {
 	var allMedia []MediaItem
 
@@ -821,6 +945,33 @@ func fetchAllMedia() ([]MediaItem, error) {
 	return allMedia, nil
 }
 
+// ensureVideoCached converts a video to MP4 and, if the video has no matching image to use
+// as its thumbnail, generates one from the video itself. A thumbnail failure is logged but
+// not returned: a cached video without a thumbnail is still worth having.
+func ensureVideoCached(item MediaItem) error {
+	// Try to get/create cached MP4 - this will trigger conversion if not cached
+	_, err := mediaCache.GetWithFile(item.URL, ".mp4", func(destPath string) error {
+		return convertVideoToMP4(item.URL, destPath)
+	})
+	if err != nil {
+		return err
+	}
+
+	// Videos matched to a camera image use that image as their thumbnail; nothing to generate
+	if !strings.HasPrefix(item.ThumbnailURL, "/api/thumbnail/") {
+		return nil
+	}
+
+	_, err = mediaCache.GetWithFile(item.URL, thumbnailSuffix, func(destPath string) error {
+		return generateThumbnail(item.URL, destPath)
+	})
+	if err != nil {
+		log.Printf("Thumbnail pre-cache failed for %s: %v", item.URL, err)
+	}
+
+	return nil
+}
+
 // preCacheVideos pre-converts videos to MP4 in the background (fire-and-forget)
 func preCacheVideos(media []MediaItem) {
 	// Create a semaphore to limit concurrent video conversions
@@ -832,17 +983,13 @@ func preCacheVideos(media []MediaItem) {
 		}
 
 		sem <- struct{}{} // Acquire
-		go func(videoURL string) {
+		go func(item MediaItem) {
 			defer func() { <-sem }() // Release
 
-			// Try to get/create cached MP4 - this will trigger conversion if not cached
-			_, err := mediaCache.GetWithFile(videoURL, ".mp4", func(destPath string) error {
-				return convertVideoToMP4(videoURL, destPath)
-			})
-			if err != nil {
-				log.Printf("Pre-cache failed for %s: %v", videoURL, err)
+			if err := ensureVideoCached(item); err != nil {
+				log.Printf("Pre-cache failed for %s: %v", item.URL, err)
 			}
-		}(item.URL)
+		}(item)
 	}
 }
 
@@ -858,19 +1005,15 @@ func preCacheVideosSync(media []MediaItem) {
 		}
 
 		wg.Add(1)
-		go func(videoURL string) {
+		go func(item MediaItem) {
 			defer wg.Done()
-			sem <- struct{}{} // Acquire
+			sem <- struct{}{}        // Acquire
 			defer func() { <-sem }() // Release
 
-			// Try to get/create cached MP4 - this will trigger conversion if not cached
-			_, err := mediaCache.GetWithFile(videoURL, ".mp4", func(destPath string) error {
-				return convertVideoToMP4(videoURL, destPath)
-			})
-			if err != nil {
-				log.Printf("Pre-cache failed for %s: %v", videoURL, err)
+			if err := ensureVideoCached(item); err != nil {
+				log.Printf("Pre-cache failed for %s: %v", item.URL, err)
 			}
-		}(item.URL)
+		}(item)
 	}
 
 	wg.Wait()
@@ -1012,6 +1155,13 @@ func fetchDateMedia(datePath string) ([]MediaItem, error) {
 
 	// Match videos with their thumbnail images
 	matchVideoThumbnails(media)
+
+	// Videos with no matching image get a thumbnail generated from the video itself
+	for i := range media {
+		if media[i].Type == "video" && media[i].ThumbnailURL == "" {
+			media[i].ThumbnailURL = "/api/thumbnail/" + url.QueryEscape(media[i].Path) + ".jpg"
+		}
+	}
 
 	return media, nil
 }

@@ -8,10 +8,10 @@ An improved web application for browsing and viewing recordings and snapshots on
 
 - 📹 Browse videos and images from your IP camera's SD card
 - 🔍 Filter by date, media type (images/videos), and trigger type (alarm/periodic)
-- 🖼️ Gallery view with thumbnails
+- 🖼️ Gallery view with thumbnails, generated from each video's 6-second mark
 - 🎬 Built-in video player for H.264 (.264) and H.265 (.265) files
 - 🔄 On-the-fly video remuxing (raw H.264/H.265 → MP4) with aggressive error handling
-- 💾 Caching system for images and converted videos
+- 💾 Caching system for images, converted videos, and thumbnails
 - ⏱️ Optional background caching for improved UX
 - 📦 Single self-contained binary
 - 📱 Responsive design
@@ -120,6 +120,7 @@ When enabled via `BACKGROUND_CACHE_ENABLED=true`, the application periodically f
 - On startup, immediately fetches and caches all media
 - Then repeats at the configured interval (default: every 5 minutes)
 - Videos are remuxed to MP4 format for instant browser playback
+- Each video gets a thumbnail: a camera image recorded during the video if one exists, otherwise a frame extracted from the video's 6-second mark
 - Video thumbnails are cached first (higher priority), followed by all other images
 - Uses the same concurrency limits as on-demand requests to avoid overwhelming the camera
 - Gracefully stops when the application receives a shutdown signal
@@ -149,7 +150,8 @@ crontab -e
 The script:
 - Removes files modified more than N days ago (default: 30 days)
 - Works recursively through all subdirectories
-- Logs the number of files deleted
+- Removes abandoned `temp-*` files left behind by an interrupted conversion (older than 1 day)
+- Logs the number of files deleted, broken down into videos, thumbnails, and images
 - Safe to run while the application is running (deleted cached files will be regenerated on next access if still available from camera)
 
 ## Security Note
