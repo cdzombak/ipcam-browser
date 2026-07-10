@@ -164,6 +164,10 @@
             pointer-events: none;
         }
 
+        .video-overlay.previewing::after {
+            display: none;
+        }
+
         .video-hover-progress {
             position: absolute;
             bottom: 0;
@@ -635,6 +639,7 @@
 
                         // Replace thumbnail with video and add progress bar
                         thumbnail.style.display = 'none';
+                        container.classList.add('previewing');
                         container.appendChild(hoverVideo);
                         container.appendChild(progressBar);
 
@@ -668,6 +673,7 @@
                             progressBarFill = null;
                         }
                         thumbnail.style.display = '';
+                        container.classList.remove('previewing');
                     });
                 });
             }
