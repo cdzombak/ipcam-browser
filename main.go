@@ -352,7 +352,7 @@ func (b *BackgroundCacher) preCacheImages(media []MediaItem) {
 			wg.Add(1)
 			go func(imgURL string) {
 				defer wg.Done()
-				sem <- struct{}{} // Acquire semaphore
+				sem <- struct{}{}        // Acquire semaphore
 				defer func() { <-sem }() // Release semaphore
 
 				ext := filepath.Ext(imgURL)
@@ -376,7 +376,7 @@ func (b *BackgroundCacher) preCacheImages(media []MediaItem) {
 			wg.Add(1)
 			go func(imgURL string) {
 				defer wg.Done()
-				sem <- struct{}{} // Acquire semaphore
+				sem <- struct{}{}        // Acquire semaphore
 				defer func() { <-sem }() // Release semaphore
 
 				ext := filepath.Ext(imgURL)
@@ -830,14 +830,14 @@ func convertVideoToMP4(sourceURL string, destPath string) error {
 
 	// Convert to MP4 using ffmpeg with proper framerate
 	cmd := exec.Command("ffmpeg",
-		"-y",                       // Overwrite output file without asking
-		"-fflags", "+genpts",       // Generate presentation timestamps
+		"-y",                 // Overwrite output file without asking
+		"-fflags", "+genpts", // Generate presentation timestamps
 		"-framerate", fmt.Sprintf("%d", fps), // Set input framerate
-		"-i", tempFile.Name(),      // Input file
-		"-c:v", "copy",             // Copy video codec (no re-encoding)
-		"-c:a", "copy",             // Copy audio codec (preserve audio if present)
-		"-movflags", "+faststart",  // Put moov atom at start for better compatibility
-		destPath,                   // Output file
+		"-i", tempFile.Name(), // Input file
+		"-c:v", "copy", // Copy video codec (no re-encoding)
+		"-c:a", "copy", // Copy audio codec (preserve audio if present)
+		"-movflags", "+faststart", // Put moov atom at start for better compatibility
+		destPath, // Output file
 	)
 
 	// Run ffmpeg and capture errors
@@ -893,11 +893,11 @@ func generateThumbnail(sourceURL string, destPath string) error {
 	// -ss before -i seeks to the nearest preceding keyframe without decoding
 	// everything up to that point.
 	cmd := exec.Command("ffmpeg",
-		"-y",                              // Overwrite output file without asking
-		"-ss", fmt.Sprintf("%.3f", seek),  // Seek to the thumbnail frame
-		"-i", videoPath,                   // Input file
-		"-frames:v", "1",                  // Capture a single frame
-		"-update", "1",                    // Write that frame to a single output file
+		"-y",                             // Overwrite output file without asking
+		"-ss", fmt.Sprintf("%.3f", seek), // Seek to the thumbnail frame
+		"-i", videoPath, // Input file
+		"-frames:v", "1", // Capture a single frame
+		"-update", "1", // Write that frame to a single output file
 		"-vf", fmt.Sprintf("scale=%d:-2", thumbnailWidth), // Scale, preserving aspect ratio
 		"-q:v", "4", // JPEG quality (2 = best, 31 = worst)
 		"-f", "image2",
