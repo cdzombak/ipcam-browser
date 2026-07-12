@@ -29,6 +29,13 @@ import (
 
 var version = "<dev>"
 
+// The camera rolls over to a new numbered directory as each one fills up, so a
+// date can hold images000..imagesNNN and record000..recordNNN.
+var (
+	imagesDirRe = regexp.MustCompile(`^images\d+$`)
+	recordDirRe = regexp.MustCompile(`^record\d+$`)
+)
+
 const (
 	// thumbnailSuffix is the cache-key suffix for generated video thumbnails.
 	// It must differ from the ".mp4" suffix so a video's thumbnail and its
@@ -1126,7 +1133,7 @@ func fetchDateMedia(datePath string) ([]MediaItem, error) {
 
 		dirName := strings.TrimSuffix(entry.Name, "/")
 
-		if dirName == "images000" {
+		if imagesDirRe.MatchString(dirName) {
 			images, err := fetchDirectory(entry.Path)
 			if err != nil {
 				log.Printf("Warning: failed to fetch images from %s: %v", entry.Path, err)
@@ -1138,7 +1145,7 @@ func fetchDateMedia(datePath string) ([]MediaItem, error) {
 					media = append(media, parseMedia(img, datePath, "image"))
 				}
 			}
-		} else if dirName == "record000" {
+		} else if recordDirRe.MatchString(dirName) {
 			videos, err := fetchDirectory(entry.Path)
 			if err != nil {
 				log.Printf("Warning: failed to fetch videos from %s: %v", entry.Path, err)
